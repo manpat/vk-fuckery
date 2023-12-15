@@ -1,9 +1,9 @@
 #version 450
 
 const vec2[] c_positions = vec2[](
-	vec2( 0.0, 0.5),
-	vec2( 0.5,-0.7),
-	vec2(-0.5,-0.7)
+	vec2( 0.0,-0.5),
+	vec2(-0.5, 0.7),
+	vec2( 0.5, 0.7)
 );
 
 void main() {
