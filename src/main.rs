@@ -16,7 +16,25 @@ use ash::extensions::{khr};
 use std::ffi::{CStr};
 
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+	{
+		use simplelog::*;
+		use std::fs::File;
+
+		CombinedLogger::init(vec![
+			TermLogger::new(LevelFilter::Warn, Config::default(), TerminalMode::Mixed, ColorChoice::Never),
+			WriteLogger::new(LevelFilter::Info, Config::default(), File::create("vk-fuck.log").unwrap()),
+		]).unwrap();
+	}
+
+	if let Err(err) = main_2() {
+		log::error!("\nExited with error: {err}");
+	}
+}
+
+
+
+fn main_2() -> anyhow::Result<()> {
 	let event_loop = EventLoop::new();
 	let window = WindowBuilder::new()
 		.with_title("Vk Fuck")
@@ -37,8 +55,8 @@ fn main() -> anyhow::Result<()> {
 	let validation_layer_name = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
 
 	let message_severity = vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-		// | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
-		// | vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+		| vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE
+		| vk::DebugUtilsMessageSeverityFlagsEXT::INFO
 		| vk::DebugUtilsMessageSeverityFlagsEXT::ERROR;
 
 	let message_type = vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
@@ -81,7 +99,6 @@ fn main() -> anyhow::Result<()> {
 			let device_props = vk_instance.get_physical_device_properties(*physical_device);
 			// let memory_props = vk_instance.get_physical_device_memory_properties(*physical_device);
 			let queue_family_props = vk_instance.get_physical_device_queue_family_properties(*physical_device);
-			let features = vk_instance.get_physical_device_features(*physical_device);
 
 			let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
 			let mut features2 = vk::PhysicalDeviceFeatures2::builder()
@@ -89,21 +106,22 @@ fn main() -> anyhow::Result<()> {
 
 			vk_instance.get_physical_device_features2(*physical_device, &mut features2);
 
-			println!("Device: {:?}", CStr::from_ptr(device_props.device_name.as_ptr()));
+			log::info!("Device: {:?}", CStr::from_ptr(device_props.device_name.as_ptr()));
 
 			// dbg!(&device_props);
 			// dbg!(&memory_props);
 			// dbg!(&queue_family_props);
-			dbg!(&features);
-			dbg!(features2.features);
-			dbg!(features13);
+
+			log::info!("=== Features");
+			log::info!("--- {:#?}", features2.features);
+			log::info!("--- {features13:#?}");
 
 			assert!(features13.dynamic_rendering > 0);
 
-			println!("=== Queues");
+			log::info!("=== Queues");
 			for (idx, family) in queue_family_props.iter().enumerate() {
-				println!("--- [{idx}] {:?}", family.queue_flags);
-				println!("--- --- present supported? {:?}", surface_fn.get_physical_device_surface_support(*physical_device, idx as u32, vk_surface)?);
+				log::info!("--- [{idx}] {:?}", family.queue_flags);
+				log::info!("--- --- present supported? {:?}", surface_fn.get_physical_device_surface_support(*physical_device, idx as u32, vk_surface)?);
 			}
 		}
 	}
@@ -134,7 +152,7 @@ fn main() -> anyhow::Result<()> {
 	];
 
 	let vk_device = unsafe {
-		let ext_names = [c"VK_KHR_swapchain".as_ptr(), c"VK_EXT_shader_object".as_ptr()];
+		let ext_names = [c"VK_KHR_swapchain".as_ptr()];
 
 		let mut features_13 = vk::PhysicalDeviceVulkan13Features::builder()
 			.dynamic_rendering(true)
@@ -551,21 +569,34 @@ unsafe extern "system" fn vulkan_debug_utils_callback(
 	p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
 	_p_user_data: *mut std::ffi::c_void,
 ) -> vk::Bool32 {
-	let severity = match message_severity {
-		vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => "[Verbose]",
-		vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => "[Warning]",
-		vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => "[Error]",
-		vk::DebugUtilsMessageSeverityFlagsEXT::INFO => "[Info]",
-		_ => "[Unknown]",
+
+	// Don't care about verbose general messages
+	if message_type == vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+		&& message_severity < vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+	{
+		return vk::FALSE
+	}
+
+	let log_level = match message_severity {
+		vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => log::Level::Trace,
+		vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => log::Level::Warn,
+		vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => log::Level::Error,
+		vk::DebugUtilsMessageSeverityFlagsEXT::INFO => log::Level::Info,
+		_ => log::Level::Trace,
 	};
+
 	let types = match message_type {
-		vk::DebugUtilsMessageTypeFlagsEXT::GENERAL => "[General]",
-		vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE => "[Performance]",
-		vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION => "[Validation]",
-		_ => "[Unknown]",
+		vk::DebugUtilsMessageTypeFlagsEXT::GENERAL => "general",
+		vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE => "performance",
+		vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION => "validation",
+		_ => "?",
 	};
-	let message = CStr::from_ptr((*p_callback_data).p_message);
-	println!("[Debug]{}{}{:?}", severity, types, message);
+
+	let c_message = CStr::from_ptr((*p_callback_data).p_message);
+	match c_message.to_str() {
+		Ok(message) => log::log!(log_level, "[vk {types}] {message}\n"),
+		Err(_) => log::log!(log_level, "[vk {types}] {c_message:?}\n"),
+	}
 
 	vk::FALSE
 }
