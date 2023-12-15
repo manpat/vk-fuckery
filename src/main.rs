@@ -226,7 +226,8 @@ fn main() -> anyhow::Result<()> {
 	// Command pool and command buffers
 	let vk_cmd_pool = unsafe {
 		let create_info = vk::CommandPoolCreateInfo::builder()
-			.queue_family_index(graphics_queue_family_index);
+			.queue_family_index(graphics_queue_family_index)
+			.flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
 
 		vk_device.create_command_pool(&create_info, None)?
 	};
@@ -240,111 +241,15 @@ fn main() -> anyhow::Result<()> {
 		vk_device.allocate_command_buffers(&create_info)?
 	};
 
-	for (index, (&cmd_buffer, &image_view)) in vk_cmd_buffers.iter().zip(&swapchain_image_views).enumerate() {
-		unsafe {
-			let begin_info = vk::CommandBufferBeginInfo::builder()
-				.flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
 
-			vk_device.begin_command_buffer(cmd_buffer, &begin_info)?;
-
-
-			vk_device.cmd_pipeline_barrier2(
-				cmd_buffer,
-				&vk::DependencyInfo::builder()
-					.image_memory_barriers(&[
-						vk::ImageMemoryBarrier2::builder()
-							.image(swapchain_images[index])
-							.old_layout(vk::ImageLayout::UNDEFINED)
-							.new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
-
-							.src_stage_mask(vk::PipelineStageFlags2::NONE)
-							.src_access_mask(vk::AccessFlags2::NONE)
-							
-							.dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-							.dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-							.subresource_range(
-								vk::ImageSubresourceRange::builder()
-									.aspect_mask(vk::ImageAspectFlags::COLOR)
-									.base_mip_level(0)
-									.base_array_layer(0)
-									.level_count(1)
-									.layer_count(1)
-									.build()
-							)
-							.build()
-					]
-				)
-			);
-
-			let color_attachments = [
-				vk::RenderingAttachmentInfo::builder()
-					.image_view(image_view)
-					.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-					.load_op(vk::AttachmentLoadOp::CLEAR)
-					.store_op(vk::AttachmentStoreOp::STORE)
-					.clear_value(vk::ClearValue {
-						color: vk::ClearColorValue {
-							float32: match index {
-								0 => [1.0, 0.5, 1.0, 1.0],
-								1 => [0.5, 1.0, 1.0, 1.0],
-								2 => [1.0, 1.0, 0.5, 1.0],
-								_ => [0.0; 4]
-							}
-						},
-					})
-					.build()
-			];
-
-			let render_info = vk::RenderingInfo::builder()
-				.layer_count(1)
-				.render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: swapchain_capabilities.current_extent,
-                })
-				.color_attachments(&color_attachments);
-
-			vk_device.cmd_begin_rendering(cmd_buffer, &render_info);
-			vk_device.cmd_end_rendering(cmd_buffer);
-
-			vk_device.cmd_pipeline_barrier2(
-				cmd_buffer,
-				&vk::DependencyInfo::builder()
-					.image_memory_barriers(&[
-						vk::ImageMemoryBarrier2::builder()
-							.image(swapchain_images[index])
-							.old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
-							.new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-
-							.src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-							.src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-							
-							.dst_stage_mask(vk::PipelineStageFlags2::NONE)
-							.dst_access_mask(vk::AccessFlags2::NONE)
-							.subresource_range(
-								vk::ImageSubresourceRange::builder()
-									.aspect_mask(vk::ImageAspectFlags::COLOR)
-									.base_mip_level(0)
-									.base_array_layer(0)
-									.level_count(1)
-									.layer_count(1)
-									.build()
-							)
-							.build()
-					]
-				)
-			);
-
-			vk_device.end_command_buffer(cmd_buffer)?;
-		}
-	}
-
+	// Set up frame sync
 	struct Sync {
 		image_available: vk::Semaphore,
 		render_finished: vk::Semaphore,
 		in_flight_fence: vk::Fence,
 	}
 
-	let mut sync_objects: Vec<_> = (0..swapchain_images.len())
+	let sync_objects: Vec<_> = (0..swapchain_images.len())
 		.map(|_| unsafe {
 			Sync {
 				image_available: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
@@ -353,6 +258,8 @@ fn main() -> anyhow::Result<()> {
 			}
 		})
 		.collect();
+
+	let mut frame_number = 0;
 
 
 	let mut destroying = false;
@@ -364,7 +271,7 @@ fn main() -> anyhow::Result<()> {
 				unsafe {
 					let timeout_ns = 1000*1000*1000;
 
-					let frame_sync = &sync_objects[0];
+					let frame_sync = &sync_objects[frame_number];
 
 					vk_device.wait_for_fences(&[frame_sync.in_flight_fence], true, timeout_ns).unwrap();
 					vk_device.reset_fences(&[frame_sync.in_flight_fence]).unwrap();
@@ -375,15 +282,116 @@ fn main() -> anyhow::Result<()> {
 						frame_sync.image_available,
 						vk::Fence::null()
 					).unwrap();
+					
+					// Build the command buffer
+					{
+						let cmd_buffer = vk_cmd_buffers[frame_number];
+						let swapchain_image = swapchain_images[image_idx as usize];
+						let swapchain_image_view = swapchain_image_views[image_idx as usize];
 
-					vk_device.queue_submit(vk_graphics_queue, &[
-						vk::SubmitInfo::builder()
+						let begin_info = vk::CommandBufferBeginInfo::builder()
+							.flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+						vk_device.begin_command_buffer(cmd_buffer, &begin_info).unwrap();
+
+						vk_device.cmd_pipeline_barrier2(
+							cmd_buffer,
+							&vk::DependencyInfo::builder()
+								.image_memory_barriers(&[
+									vk::ImageMemoryBarrier2::builder()
+										.image(swapchain_image)
+										.old_layout(vk::ImageLayout::UNDEFINED)
+										.new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
+
+										.src_stage_mask(vk::PipelineStageFlags2::NONE)
+										.src_access_mask(vk::AccessFlags2::NONE)
+										
+										.dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+										.dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+										.subresource_range(
+											vk::ImageSubresourceRange::builder()
+												.aspect_mask(vk::ImageAspectFlags::COLOR)
+												.base_mip_level(0)
+												.base_array_layer(0)
+												.level_count(1)
+												.layer_count(1)
+												.build()
+										)
+										.build()
+								]
+							)
+						);
+
+						let color_attachments = [
+							vk::RenderingAttachmentInfo::builder()
+								.image_view(swapchain_image_view)
+								.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+								.load_op(vk::AttachmentLoadOp::CLEAR)
+								.store_op(vk::AttachmentStoreOp::STORE)
+								.clear_value(vk::ClearValue {
+									color: vk::ClearColorValue {
+										float32: match frame_number {
+											0 => [1.0, 0.5, 1.0, 1.0],
+											1 => [0.5, 1.0, 1.0, 1.0],
+											2 => [1.0, 1.0, 0.5, 1.0],
+											_ => [0.0; 4]
+										}
+									},
+								})
+								.build()
+						];
+
+						let render_info = vk::RenderingInfo::builder()
+							.layer_count(1)
+							.render_area(vk::Rect2D {
+								offset: vk::Offset2D { x: 0, y: 0 },
+								extent: swapchain_capabilities.current_extent,
+							})
+							.color_attachments(&color_attachments);
+
+						vk_device.cmd_begin_rendering(cmd_buffer, &render_info);
+						vk_device.cmd_end_rendering(cmd_buffer);
+
+						vk_device.cmd_pipeline_barrier2(
+							cmd_buffer,
+							&vk::DependencyInfo::builder()
+								.image_memory_barriers(&[
+									vk::ImageMemoryBarrier2::builder()
+										.image(swapchain_image)
+										.old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
+										.new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+
+										.src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+										.src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+										
+										.dst_stage_mask(vk::PipelineStageFlags2::NONE)
+										.dst_access_mask(vk::AccessFlags2::NONE)
+										.subresource_range(
+											vk::ImageSubresourceRange::builder()
+												.aspect_mask(vk::ImageAspectFlags::COLOR)
+												.base_mip_level(0)
+												.base_array_layer(0)
+												.level_count(1)
+												.layer_count(1)
+												.build()
+										)
+										.build()
+								]
+							)
+						);
+
+						vk_device.end_command_buffer(cmd_buffer).unwrap();
+					}
+
+					vk_device.queue_submit(vk_graphics_queue,
+						&[vk::SubmitInfo::builder()
 							.command_buffers(&[vk_cmd_buffers[image_idx as usize]])
 							.wait_semaphores(&[frame_sync.image_available])
 							.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
 							.signal_semaphores(&[frame_sync.render_finished])
-							.build()
-					], frame_sync.in_flight_fence).unwrap();
+							.build()],
+						frame_sync.in_flight_fence
+					).unwrap();
 
 					swapchain_fn.queue_present(vk_graphics_queue,
 						&vk::PresentInfoKHR::builder()
@@ -392,7 +400,7 @@ fn main() -> anyhow::Result<()> {
 							.wait_semaphores(&[frame_sync.render_finished])
 					).unwrap();
 
-					sync_objects.rotate_left(1);
+					frame_number = (frame_number + 1) % sync_objects.len();
 				}
 			}
 
