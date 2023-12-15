@@ -12,5 +12,5 @@ ash-window = "0.12"
 raw-window-handle = "0.5.0"
 winit = "0.28"
 
-# [build-dependencies]
-# shaderc = {version = "0.8"}
+[build-dependencies]
+anyhow = "1.0.75"
