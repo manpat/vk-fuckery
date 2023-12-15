@@ -1,0 +1,13 @@
+[package]
+name = "vk-fuck"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.75"
+ash = "0.37.3"
+ash-window = "0.12"
+raw-window-handle = "0.5.0"
+winit = "0.28"
