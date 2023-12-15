@@ -277,8 +277,8 @@ fn main_2() -> anyhow::Result<()> {
 		}
 	}
 
-	let vert_sh = create_shader_module(&vk_device, "shaders/main.vert.spv").unwrap();
-	let frag_sh = create_shader_module(&vk_device, "shaders/main.frag.spv").unwrap();
+	let vert_sh = create_shader_module(&vk_device, "shaders/main.vs.spv").unwrap();
+	let frag_sh = create_shader_module(&vk_device, "shaders/main.fs.spv").unwrap();
 
 	let vk_pipeline_layout = unsafe {
 		vk_device.create_pipeline_layout(
