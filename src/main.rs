@@ -285,9 +285,9 @@ fn main() -> anyhow::Result<()> {
 					.clear_value(vk::ClearValue {
 						color: vk::ClearColorValue {
 							float32: match index {
-								0 => [1.0, 0.0, 1.0, 1.0],
-								1 => [0.0, 1.0, 1.0, 1.0],
-								2 => [1.0, 1.0, 0.0, 1.0],
+								0 => [1.0, 0.5, 1.0, 1.0],
+								1 => [0.5, 1.0, 1.0, 1.0],
+								2 => [1.0, 1.0, 0.5, 1.0],
 								_ => [0.0; 4]
 							}
 						},
@@ -338,27 +338,23 @@ fn main() -> anyhow::Result<()> {
 		}
 	}
 
-	// struct Sync {
-	// 	image_available: vk::Semaphore,
-	// 	render_finished: vk::Semaphore,
-	// 	in_flight_fence: vk::Fence,
-	// }
+	struct Sync {
+		image_available: vk::Semaphore,
+		render_finished: vk::Semaphore,
+		in_flight_fence: vk::Fence,
+	}
+
+	let mut sync_objects: Vec<_> = (0..swapchain_images.len())
+		.map(|_| unsafe {
+			Sync {
+				image_available: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
+				render_finished: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
+				in_flight_fence: vk_device.create_fence(&vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED), None).unwrap(),
+			}
+		})
+		.collect();
 
 
-	let vk_image_available_semaphore = unsafe {
-		vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?
-	};
-	
-	let vk_render_finished_semaphore = unsafe {
-		vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?
-	};
-	
-	let vk_frame_in_flight_fence = unsafe {
-		vk_device.create_fence(&vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED), None)?
-	};
-
-
-	// let mut app = unsafe { App::create(&window)? };
 	let mut destroying = false;
 
 	event_loop.run(move |event, _, control_flow| {
@@ -366,34 +362,37 @@ fn main() -> anyhow::Result<()> {
 			// Render a frame if our Vulkan app is not being destroyed.
 			Event::MainEventsCleared if !destroying => {
 				unsafe {
-					// app.render(&window).unwrap();
 					let timeout_ns = 1000*1000*1000;
 
-					vk_device.wait_for_fences(&[vk_frame_in_flight_fence], true, timeout_ns).unwrap();
-					vk_device.reset_fences(&[vk_frame_in_flight_fence]).unwrap();
+					let frame_sync = &sync_objects[0];
+
+					vk_device.wait_for_fences(&[frame_sync.in_flight_fence], true, timeout_ns).unwrap();
+					vk_device.reset_fences(&[frame_sync.in_flight_fence]).unwrap();
 
 					let (image_idx, _) = swapchain_fn.acquire_next_image(
 						vk_swapchain,
 						timeout_ns,
-						vk_image_available_semaphore,
+						frame_sync.image_available,
 						vk::Fence::null()
 					).unwrap();
 
 					vk_device.queue_submit(vk_graphics_queue, &[
 						vk::SubmitInfo::builder()
 							.command_buffers(&[vk_cmd_buffers[image_idx as usize]])
-							.wait_semaphores(&[vk_image_available_semaphore])
+							.wait_semaphores(&[frame_sync.image_available])
 							.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-							.signal_semaphores(&[vk_render_finished_semaphore])
+							.signal_semaphores(&[frame_sync.render_finished])
 							.build()
-					], vk_frame_in_flight_fence).unwrap();
+					], frame_sync.in_flight_fence).unwrap();
 
 					swapchain_fn.queue_present(vk_graphics_queue,
 						&vk::PresentInfoKHR::builder()
 							.swapchains(&[vk_swapchain])
 							.image_indices(&[image_idx])
-							.wait_semaphores(&[vk_render_finished_semaphore])
+							.wait_semaphores(&[frame_sync.render_finished])
 					).unwrap();
+
+					sync_objects.rotate_left(1);
 				}
 			}
 
@@ -405,7 +404,6 @@ fn main() -> anyhow::Result<()> {
 				}, .. }, .. } =>
 			{
 				destroying = true;
-				// unsafe { app.destroy(); }
 				control_flow.set_exit();
 			}
 
@@ -414,9 +412,11 @@ fn main() -> anyhow::Result<()> {
 
 				vk_device.destroy_command_pool(vk_cmd_pool, None);
 
-				vk_device.destroy_semaphore(vk_image_available_semaphore, None);
-				vk_device.destroy_semaphore(vk_render_finished_semaphore, None);
-				vk_device.destroy_fence(vk_frame_in_flight_fence, None);
+				for &Sync{image_available, render_finished, in_flight_fence} in sync_objects.iter() {
+					vk_device.destroy_semaphore(image_available, None);
+					vk_device.destroy_semaphore(render_finished, None);
+					vk_device.destroy_fence(in_flight_fence, None);
+				}
 
 				for view in swapchain_image_views.iter() {
 					vk_device.destroy_image_view(*view, None);
@@ -433,25 +433,6 @@ fn main() -> anyhow::Result<()> {
 
 	})
 }
-
-// /// Our Vulkan app.
-// #[derive(Clone, Debug)]
-// struct App {}
-
-// impl App {
-// 	/// Creates our Vulkan app.
-// 	unsafe fn create(window: &Window) -> anyhow::Result<Self> {
-// 		Ok(Self {})
-// 	}
-
-// 	/// Renders a frame for our Vulkan app.
-// 	unsafe fn render(&mut self, window: &Window) -> anyhow::Result<()> {
-// 		Ok(())
-// 	}
-
-// 	/// Destroys our Vulkan app.
-// 	unsafe fn destroy(&mut self) {}
-// }
 
 
 unsafe extern "system" fn vulkan_debug_utils_callback(
