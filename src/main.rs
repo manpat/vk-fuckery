@@ -134,7 +134,7 @@ fn main() -> anyhow::Result<()> {
 	];
 
 	let vk_device = unsafe {
-		let ext_names = [c"VK_KHR_swapchain".as_ptr()];
+		let ext_names = [c"VK_KHR_swapchain".as_ptr(), c"VK_EXT_shader_object".as_ptr()];
 
 		let mut features_13 = vk::PhysicalDeviceVulkan13Features::builder()
 			.dynamic_rendering(true)
@@ -158,6 +158,8 @@ fn main() -> anyhow::Result<()> {
 		surface_fn.get_physical_device_surface_capabilities(vk_physical_device, vk_surface)?
 	};
 
+	let swapchain_extent = swapchain_capabilities.current_extent;
+
 	let vk_swapchain = unsafe {
 		let supported_formats = surface_fn.get_physical_device_surface_formats(vk_physical_device, vk_surface)?;
 		let supported_present_modes = surface_fn.get_physical_device_surface_present_modes(vk_physical_device, vk_surface)?;
@@ -178,7 +180,7 @@ fn main() -> anyhow::Result<()> {
 			// TODO(pat.m): get these from supported_formats
 			.image_format(vk::Format::B8G8R8A8_SRGB)
 			.image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
-			.image_extent(swapchain_capabilities.current_extent)
+			.image_extent(swapchain_extent)
 			.image_array_layers(1)
 			.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
 			.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -239,6 +241,99 @@ fn main() -> anyhow::Result<()> {
 			.level(vk::CommandBufferLevel::PRIMARY);
 
 		vk_device.allocate_command_buffers(&create_info)?
+	};
+
+
+	// Load shaders
+	fn create_shader_module(device: &ash::Device, path: impl AsRef<std::path::Path>) -> anyhow::Result<vk::ShaderModule> {
+		let contents = std::fs::read(path)?;
+		anyhow::ensure!(contents.len() % 4 == 0);
+
+		unsafe {
+			let contents = std::slice::from_raw_parts(contents.as_ptr().cast(), contents.len()/4);
+
+			let create_info = vk::ShaderModuleCreateInfo::builder()
+				.code(contents);
+
+			Ok(device.create_shader_module(&create_info, None)?)
+		}
+	}
+
+	let vert_sh = create_shader_module(&vk_device, "shaders/main.vert.spv").unwrap();
+	let frag_sh = create_shader_module(&vk_device, "shaders/main.frag.spv").unwrap();
+
+	let vk_pipeline_layout = unsafe {
+		vk_device.create_pipeline_layout(
+			&vk::PipelineLayoutCreateInfo::default(),
+			None
+		)?
+	};
+
+	let vk_pipeline = unsafe {
+		let shader_stages = [
+			vk::PipelineShaderStageCreateInfo::builder()
+				.module(vert_sh)
+				.name(c"main")
+				.stage(vk::ShaderStageFlags::VERTEX)
+				.build(),
+
+			vk::PipelineShaderStageCreateInfo::builder()
+				.module(frag_sh)
+				.name(c"main")
+				.stage(vk::ShaderStageFlags::FRAGMENT)
+				.build(),
+		];
+
+		let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+
+		let ia_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
+			.topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+        let viewports = [vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: swapchain_extent.width as f32,
+            height: swapchain_extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }];
+
+        let scissors = [vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: swapchain_extent,
+        }];
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
+        	.scissors(&scissors)
+        	.viewports(&viewports);
+
+        let raster_state = vk::PipelineRasterizationStateCreateInfo::builder()
+        	.cull_mode(vk::CullModeFlags::BACK)
+        	.front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        	.polygon_mode(vk::PolygonMode::FILL)
+        	.line_width(1.0);
+
+    	let ms_state = vk::PipelineMultisampleStateCreateInfo::builder()
+    		.rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let graphic_pipeline_create_infos = [
+        	vk::GraphicsPipelineCreateInfo::builder()
+        		.stages(&shader_stages)
+        		.layout(vk_pipeline_layout)
+        		.vertex_input_state(&vertex_input_state)
+        		.input_assembly_state(&ia_state)
+        		.viewport_state(&viewport_state)
+        		.rasterization_state(&raster_state)
+        		.multisample_state(&ms_state)
+        		.build()
+        ];
+		
+		let pipelines = vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None).unwrap();
+
+		vk_device.destroy_shader_module(vert_sh, None);
+		vk_device.destroy_shader_module(frag_sh, None);
+
+		pipelines[0]
 	};
 
 
@@ -345,11 +440,15 @@ fn main() -> anyhow::Result<()> {
 							.layer_count(1)
 							.render_area(vk::Rect2D {
 								offset: vk::Offset2D { x: 0, y: 0 },
-								extent: swapchain_capabilities.current_extent,
+								extent: swapchain_extent,
 							})
 							.color_attachments(&color_attachments);
 
 						vk_device.cmd_begin_rendering(cmd_buffer, &render_info);
+
+						vk_device.cmd_bind_pipeline(cmd_buffer, vk::PipelineBindPoint::GRAPHICS, vk_pipeline);
+						vk_device.cmd_draw(cmd_buffer, 3, 1, 0, 0);
+
 						vk_device.cmd_end_rendering(cmd_buffer);
 
 						vk_device.cmd_pipeline_barrier2(
@@ -417,6 +516,9 @@ fn main() -> anyhow::Result<()> {
 
 			Event::LoopDestroyed => unsafe {
 				vk_device.device_wait_idle().unwrap();
+
+				vk_device.destroy_pipeline(vk_pipeline, None);
+				vk_device.destroy_pipeline_layout(vk_pipeline_layout, None);
 
 				vk_device.destroy_command_pool(vk_cmd_pool, None);
 
