@@ -1,5 +1,3 @@
-#![feature(c_str_literals)]
-
 use winit::{
 	event::{Event, WindowEvent, KeyboardInput, ElementState, VirtualKeyCode},
 	event_loop::{EventLoop},
@@ -176,7 +174,15 @@ fn main_2() -> anyhow::Result<()> {
 		surface_fn.get_physical_device_surface_capabilities(vk_physical_device, vk_surface)?
 	};
 
-	let swapchain_extent = swapchain_capabilities.current_extent;
+	const NO_CURRENT_EXTENT: vk::Extent2D = vk::Extent2D{ width: u32::MAX, height: u32::MAX };
+	let swapchain_extent = match swapchain_capabilities.current_extent {
+		NO_CURRENT_EXTENT => {
+			let (width, height) = window.inner_size().into();
+			vk::Extent2D{ width, height }
+		},
+
+		current => current,
+	};
 
 	let vk_swapchain = unsafe {
 		let supported_formats = surface_fn.get_physical_device_surface_formats(vk_physical_device, vk_surface)?;

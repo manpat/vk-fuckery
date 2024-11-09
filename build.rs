@@ -5,8 +5,14 @@ use std::env;
 fn main() -> anyhow::Result<()> {
 	println!("cargo:rerun-if-changed=build.rs");
 
-	let sdk_path = env::var("VULKAN_SDK").expect("Couldn't read VULKAN_SDK");
-	let glslc_path = Path::new(&sdk_path).join("Bin/glslc.exe");
+	#[cfg(windows)]
+	let glslc_path = {
+		let sdk_path = env::var("VULKAN_SDK").expect("Couldn't read VULKAN_SDK");
+		Path::new(&sdk_path).join("Bin/glslc.exe")
+	};
+
+	#[cfg(not(windows))]
+	let glslc_path = Path::new("glslc");
 
 	for entry in std::fs::read_dir("shaders")? {
 		let entry = entry?;
@@ -22,7 +28,7 @@ fn main() -> anyhow::Result<()> {
 
 		compile_glsl(&glslc_path, &shader_path)?;
 	}
-	
+
 	Ok(())
 }
 
