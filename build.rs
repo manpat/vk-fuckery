@@ -1,6 +1,6 @@
 use std::process::{Command, Stdio};
 use std::path::Path;
-use std::env;
+// use std::env;
 
 fn main() -> anyhow::Result<()> {
 	println!("cargo:rerun-if-changed=build.rs");
@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn compile_glsl(compiler_path: &Path, shader_path: &Path) -> anyhow::Result<()> {
-	use std::io::Write;
+	// use std::io::Write;
 
 	println!("cargo:rerun-if-changed={}", shader_path.display());
 
