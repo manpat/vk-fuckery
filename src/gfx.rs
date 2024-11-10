@@ -1,11 +1,15 @@
 use anyhow::{Result, Context};
 use ash::vk;
-use raw_window_handle::HasDisplayHandle;
+
+use winit::event_loop::OwnedDisplayHandle;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use std::ffi::CStr;
 
 
 pub struct Core {
+	display_handle: OwnedDisplayHandle,
+
 	vk_entry: ash::Entry,
 	vk_instance: ash::Instance,
 	vk_device: ash::Device,
@@ -22,7 +26,7 @@ pub struct Core {
 }
 
 impl Core {
-	pub fn new(display_handle: impl HasDisplayHandle) -> Result<Core> {
+	pub fn new(display_handle: OwnedDisplayHandle) -> Result<Core> {
 		let vk_entry = unsafe { ash::Entry::load()? };
 
 		let vk_app_info = vk::ApplicationInfo::default()
@@ -32,9 +36,9 @@ impl Core {
 			.engine_version(vk::make_api_version(0, 1, 0, 0))
 			.api_version(vk::API_VERSION_1_3);
 
-		let display_handle = display_handle.display_handle()?;
+		let raw_display_handle = display_handle.display_handle()?.as_raw();
 
-		let mut required_extensions = ash_window::enumerate_required_extensions(display_handle.as_raw())?.to_owned();
+		let mut required_extensions = ash_window::enumerate_required_extensions(raw_display_handle)?.to_owned();
 		required_extensions.push(c"VK_EXT_debug_utils".as_ptr());
 
 		let validation_layer_name = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
@@ -109,6 +113,8 @@ impl Core {
 		log::info!("gfx core init");
 
 		Ok(Core {
+			display_handle,
+
 			vk_entry,
 			vk_instance,
 			vk_device,
@@ -122,6 +128,15 @@ impl Core {
 			surface_fns,
 			swapchain_fns,
 		})
+	}
+
+	pub fn create_surface(&self, window_handle: impl HasWindowHandle) -> Result<vk::SurfaceKHR> {
+		let display_handle = self.display_handle.display_handle()?.as_raw();
+		let window_handle = window_handle.window_handle()?.as_raw();
+		unsafe {
+			ash_window::create_surface(&self.vk_entry, &self.vk_instance, display_handle, window_handle, None)
+				.map_err(Into::into)
+		}
 	}
 }
 
@@ -181,7 +196,6 @@ unsafe extern "system" fn vulkan_debug_utils_callback(
 
 	vk::FALSE
 }
-
 
 
 fn select_physical_device(vk_instance: &ash::Instance) -> anyhow::Result<vk::PhysicalDevice> {

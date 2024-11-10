@@ -457,7 +457,10 @@ impl ApplicationHandler for App {
 			.with_title("Vk Fuck")
 			.with_inner_size(LogicalSize::new(1024, 768));
 
-		self.window = Some(event_loop.create_window(window_attrs).unwrap());
+		let window = event_loop.create_window(window_attrs).unwrap();
+		let _surface = self.gfx_core.create_surface(&window).unwrap();
+
+		self.window = Some(window);
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -486,3 +489,5 @@ impl ApplicationHandler for App {
 		}
 	}
 }
+
+pub fn default<T: Default>() -> T { T::default() }
