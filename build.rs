@@ -1,13 +1,12 @@
 use std::process::{Command, Stdio};
 use std::path::Path;
-// use std::env;
 
 fn main() -> anyhow::Result<()> {
 	println!("cargo:rerun-if-changed=build.rs");
 
 	#[cfg(windows)]
 	let glslc_path = {
-		let sdk_path = env::var("VULKAN_SDK").expect("Couldn't read VULKAN_SDK");
+		let sdk_path = std::env::var("VULKAN_SDK").expect("Couldn't read VULKAN_SDK");
 		Path::new(&sdk_path).join("Bin/glslc.exe")
 	};
 
