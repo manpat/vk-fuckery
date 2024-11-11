@@ -5,6 +5,7 @@ use winit::event_loop::OwnedDisplayHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use std::ffi::CStr;
+use std::cell::Cell;
 
 
 pub struct Core {
@@ -17,7 +18,9 @@ pub struct Core {
 
 	pub vk_queue: vk::Queue,
 	pub vk_cmd_pool: vk::CommandPool,
+
 	pub vk_timeline_semaphore: vk::Semaphore,
+	pub timeline_value: Cell<u64>,
 
 	vk_debug_messenger: vk::DebugUtilsMessengerEXT,
 
@@ -88,6 +91,9 @@ impl Core {
 					.queue_priorities(&[1.0])
 			];
 
+			let mut features_12 = vk::PhysicalDeviceVulkan12Features::default()
+				.timeline_semaphore(true);
+
 			let mut features_13 = vk::PhysicalDeviceVulkan13Features::default()
 				.dynamic_rendering(true)
 				.synchronization2(true);
@@ -95,6 +101,7 @@ impl Core {
 			let device_create_info = vk::DeviceCreateInfo::default()
 				.queue_create_infos(&queue_create_infos)
 				.enabled_extension_names(&ext_names)
+				.push_next(&mut features_12)
 				.push_next(&mut features_13);
 
 			vk_instance.create_device(vk_physical_device, &device_create_info, None)?
@@ -110,11 +117,11 @@ impl Core {
 		};
 
 		let vk_timeline_semaphore = unsafe {
-			let timeline_create_info = vk::SemaphoreTypeCreateInfo::default()
+			let mut timeline_create_info = vk::SemaphoreTypeCreateInfo::default()
 				.semaphore_type(vk::SemaphoreType::TIMELINE)
 				.initial_value(0);
 
-			vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut timeline_create_info), None)
+			vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut timeline_create_info), None)?
 		};
 
 		let surface_fns = ash::khr::surface::Instance::new(&vk_entry, &vk_instance);
@@ -132,7 +139,9 @@ impl Core {
 
 			vk_queue,
 			vk_cmd_pool,
+
 			vk_timeline_semaphore,
+			timeline_value: Cell::new(0),
 
 			vk_debug_messenger,
 
@@ -156,6 +165,12 @@ impl Core {
 			self.surface_fns.get_physical_device_surface_capabilities(self.vk_physical_device, surface)
 				.map_err(Into::into)
 		}
+	}
+
+	pub fn next_timeline_value(&self) -> u64 {
+		let next_value = self.timeline_value.get() + 1;
+		self.timeline_value.set(next_value);
+		next_value
 	}
 }
 

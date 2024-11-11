@@ -133,16 +133,16 @@ fn main() -> anyhow::Result<()> {
 
 // 	// Set up frame sync
 // 	struct Sync {
-// 		image_available: vk::Semaphore,
-// 		render_finished: vk::Semaphore,
+// 		image_available_semaphore: vk::Semaphore,
+// 		submit_finish_semaphore: vk::Semaphore,
 // 		in_flight_fence: vk::Fence,
 // 	}
 
 // 	let sync_objects: Vec<_> = (0..swapchain_images.len())
 // 		.map(|_| unsafe {
 // 			Sync {
-// 				image_available: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
-// 				render_finished: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
+// 				image_available_semaphore: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
+// 				submit_finish_semaphore: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
 // 				in_flight_fence: vk_device.create_fence(&vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED), None).unwrap(),
 // 			}
 // 		})
@@ -176,7 +176,7 @@ fn main() -> anyhow::Result<()> {
 // 					let (image_idx, _) = swapchain_fn.acquire_next_image(
 // 						vk_swapchain,
 // 						timeout_ns,
-// 						frame_sync.image_available,
+// 						frame_sync.image_available_semaphore,
 // 						vk::Fence::null()
 // 					).unwrap();
 
@@ -282,9 +282,9 @@ fn main() -> anyhow::Result<()> {
 // 					vk_device.queue_submit(vk_graphics_queue,
 // 						&[vk::SubmitInfo::default()
 // 							.command_buffers(&[vk_cmd_buffers[image_idx as usize]])
-// 							.wait_semaphores(&[frame_sync.image_available])
+// 							.wait_semaphores(&[frame_sync.image_available_semaphore])
 // 							.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-// 							.signal_semaphores(&[frame_sync.render_finished])
+// 							.signal_semaphores(&[frame_sync.submit_finish_semaphore])
 // 						],
 // 						frame_sync.in_flight_fence
 // 					).unwrap();
@@ -293,7 +293,7 @@ fn main() -> anyhow::Result<()> {
 // 						&vk::PresentInfoKHR::default()
 // 							.swapchains(&[vk_swapchain])
 // 							.image_indices(&[image_idx])
-// 							.wait_semaphores(&[frame_sync.render_finished])
+// 							.wait_semaphores(&[frame_sync.submit_finish_semaphore])
 // 					).unwrap();
 
 // 					frame_number = (frame_number + 1) % sync_objects.len();
@@ -319,9 +319,9 @@ fn main() -> anyhow::Result<()> {
 
 // 				vk_device.destroy_command_pool(vk_cmd_pool, None);
 
-// 				for &Sync{image_available, render_finished, in_flight_fence} in sync_objects.iter() {
-// 					vk_device.destroy_semaphore(image_available, None);
-// 					vk_device.destroy_semaphore(render_finished, None);
+// 				for &Sync{image_available_semaphore, submit_finish_semaphore, in_flight_fence} in sync_objects.iter() {
+// 					vk_device.destroy_semaphore(image_available_semaphore, None);
+// 					vk_device.destroy_semaphore(submit_finish_semaphore, None);
 // 					vk_device.destroy_fence(in_flight_fence, None);
 // 				}
 
@@ -368,40 +368,6 @@ impl ApplicationHandler for App {
 		let window = event_loop.create_window(window_attrs).unwrap();
 		let presentable_surface = PresentableSurface::new(&self.gfx_core, &window).unwrap();
 
-		let frame = presentable_surface.start_frame(&self.gfx_core).unwrap();
-
-		unsafe {
-			let color_attachments = [
-				vk::RenderingAttachmentInfo::default()
-					.image_view(frame.vk_swapchain_image_view)
-					.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-					.load_op(vk::AttachmentLoadOp::CLEAR)
-					.store_op(vk::AttachmentStoreOp::STORE)
-					.clear_value(vk::ClearValue {
-						color: vk::ClearColorValue {
-							float32: [1.0, 0.5, 1.0, 1.0],
-						},
-					})
-			];
-
-			let render_info = vk::RenderingInfo::default()
-				.layer_count(1)
-				.render_area(vk::Rect2D {
-					offset: vk::Offset2D { x: 0, y: 0 },
-					extent: presentable_surface.swapchain_extent,
-				})
-				.color_attachments(&color_attachments);
-
-			self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
-
-			// self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, vk_pipeline);
-			// self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
-
-			self.gfx_core.vk_device.cmd_end_rendering(frame.vk_cmd_buffer);
-		}
-
-		presentable_surface.submit_frame(&self.gfx_core, frame).unwrap();
-
 		self.window = Some(window);
 		self.presentable_surface = Some(presentable_surface);
 	}
@@ -413,20 +379,44 @@ impl ApplicationHandler for App {
 			},
 
 			WindowEvent::RedrawRequested => {
-				// Redraw the application.
-				//
-				// It's preferable for applications that do not render continuously to render in
-				// this event rather than in AboutToWait, since rendering in here allows
-				// the program to gracefully handle redraws requested by the OS.
+				let presentable_surface = self.presentable_surface.as_mut().unwrap();
 
-				// Draw.
+				let frame = presentable_surface.start_frame(&self.gfx_core).unwrap();
 
-				// Queue a RedrawRequested event.
-				//
-				// You only need to call this if you've determined that you need to redraw in
-				// applications which do not always need to. Applications that redraw continuously
-				// can render here instead.
-				self.window.as_ref().unwrap().request_redraw();
+				unsafe {
+					let color_attachments = [
+						vk::RenderingAttachmentInfo::default()
+							.image_view(frame.vk_swapchain_image_view)
+							.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+							.load_op(vk::AttachmentLoadOp::CLEAR)
+							.store_op(vk::AttachmentStoreOp::STORE)
+							.clear_value(vk::ClearValue {
+								color: vk::ClearColorValue {
+									float32: [1.0, 0.5, 1.0, 1.0],
+								},
+							})
+					];
+
+					let render_info = vk::RenderingInfo::default()
+						.layer_count(1)
+						.render_area(vk::Rect2D {
+							offset: vk::Offset2D { x: 0, y: 0 },
+							extent: presentable_surface.swapchain_extent,
+						})
+						.color_attachments(&color_attachments);
+
+					self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
+
+					// self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, vk_pipeline);
+					// self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
+
+					self.gfx_core.vk_device.cmd_end_rendering(frame.vk_cmd_buffer);
+				}
+
+
+				// window.pre_present_notify();
+
+				presentable_surface.submit_frame(&self.gfx_core, frame).unwrap();
 			}
 			_ => (),
 		}
@@ -436,18 +426,26 @@ impl ApplicationHandler for App {
 
 use ash::vk;
 
+struct FrameSync {
+	image_available_semaphore: vk::Semaphore,
+	submit_finish_semaphore: vk::Semaphore,
+
+	next_wait_timeline_value: u64,
+}
+
 pub struct PresentableSurface {
 	vk_surface: vk::SurfaceKHR,
 
 	vk_swapchain: vk::SwapchainKHR,
 	vk_swapchain_images: Vec<vk::Image>,
 	vk_swapchain_image_views: Vec<vk::ImageView>,
-	vk_image_available_semaphores: Vec<vk::Semaphore>,
+
+	frame_syncs: Vec<FrameSync>,
+	next_sync_index: usize,
 
 	vk_cmd_buffers: Vec<vk::CommandBuffer>,
 
 	swapchain_extent: vk::Extent2D,
-	frame_number: usize,
 }
 
 impl PresentableSurface {
@@ -545,6 +543,16 @@ impl PresentableSurface {
 			core.vk_device.allocate_command_buffers(&create_info)?
 		};
 
+		let frame_syncs = (0..vk_swapchain_images.len())
+			.map(|_| unsafe {
+				anyhow::Result::Ok(FrameSync {
+					image_available_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
+					submit_finish_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
+					next_wait_timeline_value: 0,
+				})
+			})
+			.collect::<anyhow::Result<Vec<_>>>()?;
+
 		Ok(PresentableSurface {
 			vk_surface,
 
@@ -552,28 +560,46 @@ impl PresentableSurface {
 			vk_swapchain_images,
 			vk_swapchain_image_views,
 
+			frame_syncs,
+			next_sync_index: 0,
+
 			vk_cmd_buffers,
 
 			swapchain_extent,
-			frame_number: 0,
 		})
 	}
 
-	fn start_frame(&self, core: &gfx::Core) -> anyhow::Result<Frame> {
+	fn start_frame(&mut self, core: &gfx::Core) -> anyhow::Result<Frame> {
 		let timeout_ns = 1000*1000*1000;
-		let (image_idx, _) = unsafe {
+
+		let sync_index = self.next_sync_index;
+		self.next_sync_index = (self.next_sync_index + 1) % self.frame_syncs.len();
+
+		let frame_sync = &self.frame_syncs[sync_index];
+		let vk_cmd_buffer = self.vk_cmd_buffers[sync_index];
+
+		unsafe {
+			core.vk_device.wait_semaphores(
+				&vk::SemaphoreWaitInfo::default()
+					.semaphores(&[core.vk_timeline_semaphore])
+					.values(&[frame_sync.next_wait_timeline_value]),
+				timeout_ns
+			)?;
+		}
+
+		let (image_index, _) = unsafe {
 			core.swapchain_fns.acquire_next_image(
 				self.vk_swapchain,
 				timeout_ns,
-				vk::Semaphore::null(),
+				frame_sync.image_available_semaphore,
 				vk::Fence::null()
 			)?
 		};
 
-		let image_idx = image_idx as usize;
-		let vk_cmd_buffer = self.vk_cmd_buffers[image_idx];
-		let vk_swapchain_image = self.vk_swapchain_images[image_idx];
-		let vk_swapchain_image_view = self.vk_swapchain_image_views[image_idx];
+		let image_index = image_index as usize;
+
+		let vk_swapchain_image = self.vk_swapchain_images[image_index];
+		let vk_swapchain_image_view = self.vk_swapchain_image_views[image_index];
 
 		unsafe {
 			core.vk_device.begin_command_buffer(vk_cmd_buffer,
@@ -612,11 +638,14 @@ impl PresentableSurface {
 			vk_swapchain_image_view,
 			vk_cmd_buffer,
 
-			image_idx,
+			sync_index,
+			image_index,
 		})
 	}
 
-	fn submit_frame(&self, core: &gfx::Core, frame: Frame) -> anyhow::Result<()> {
+	fn submit_frame(&mut self, core: &gfx::Core, frame: Frame) -> anyhow::Result<()> {
+		let frame_sync = &mut self.frame_syncs[frame.sync_index];
+
 		unsafe {
 			core.vk_device.cmd_pipeline_barrier2(
 				frame.vk_cmd_buffer,
@@ -644,29 +673,31 @@ impl PresentableSurface {
 				)
 			);
 
+			core.vk_device.end_command_buffer(frame.vk_cmd_buffer)?;
+
+			let timeline_value = core.next_timeline_value();
+			frame_sync.next_wait_timeline_value = timeline_value;
+
 			core.vk_device.queue_submit(
 				core.vk_queue,
-				&[vk::SubmitInfo::default()
-					.command_buffers(&[frame.vk_cmd_buffer])
-					// .wait_semaphores(&[frame_sync.image_available])
-					.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-					// .signal_semaphores(&[frame_sync.render_finished])
+				&[
+					vk::SubmitInfo::default()
+						.command_buffers(&[frame.vk_cmd_buffer])
+						.wait_semaphores(&[frame_sync.image_available_semaphore])
+						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+						.signal_semaphores(&[core.vk_timeline_semaphore, frame_sync.submit_finish_semaphore])
+						.push_next(&mut vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&[timeline_value, 1]))
 				],
-				// frame_sync.in_flight_fence
 				vk::Fence::null()
 			)?;
-
-			core.vk_device.device_wait_idle()?;
 
 			core.swapchain_fns.queue_present(
 				core.vk_queue,
 				&vk::PresentInfoKHR::default()
 					.swapchains(&[self.vk_swapchain])
-					.image_indices(&[frame.image_idx as u32])
-					// .wait_semaphores(&[frame_sync.render_finished])
+					.image_indices(&[frame.image_index as u32])
+					.wait_semaphores(&[frame_sync.submit_finish_semaphore])
 			)?;
-
-			core.vk_device.end_command_buffer(frame.vk_cmd_buffer)?;
 		}
 
 		Ok(())
@@ -679,5 +710,6 @@ pub struct Frame {
 	vk_swapchain_image_view: vk::ImageView,
 	vk_cmd_buffer: vk::CommandBuffer,
 
-	image_idx: usize,
+	sync_index: usize,
+	image_index: usize,
 }
