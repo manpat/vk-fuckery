@@ -35,11 +35,6 @@ fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-// fn main_2() -> anyhow::Result<()> {
-
-
-
-
 
 // 	// Load shaders
 // 	fn create_shader_module(device: &ash::Device, path: impl AsRef<std::path::Path>) -> anyhow::Result<vk::ShaderModule> {
@@ -130,176 +125,6 @@ fn main() -> anyhow::Result<()> {
 // 		pipelines[0]
 // 	};
 
-
-// 	// Set up frame sync
-// 	struct Sync {
-// 		image_available_semaphore: vk::Semaphore,
-// 		submit_finish_semaphore: vk::Semaphore,
-// 		in_flight_fence: vk::Fence,
-// 	}
-
-// 	let sync_objects: Vec<_> = (0..swapchain_images.len())
-// 		.map(|_| unsafe {
-// 			Sync {
-// 				image_available_semaphore: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
-// 				submit_finish_semaphore: vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).unwrap(),
-// 				in_flight_fence: vk_device.create_fence(&vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED), None).unwrap(),
-// 			}
-// 		})
-// 		.collect();
-
-// 	let timeline_semaphore = unsafe {
-// 		let timeline_create_info = vk::SemaphoreTypeCreateInfo::default()
-// 			.semaphore_type(vk::SemaphoreType::TIMELINE)
-// 			.initial_value(0);
-
-// 		vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut timeline_create_info), None)
-// 	};
-
-// 	let mut frame_number = 0;
-
-
-// 	let mut destroying = false;
-
-// 	event_loop.run(move |event, _, control_flow| {
-// 		match event {
-// 			// Render a frame if our Vulkan app is not being destroyed.
-// 			Event::MainEventsCleared if !destroying => {
-// 				unsafe {
-// 					let timeout_ns = 1000*1000*1000;
-
-// 					let frame_sync = &sync_objects[frame_number];
-
-// 					vk_device.wait_for_fences(&[frame_sync.in_flight_fence], true, timeout_ns).unwrap();
-// 					vk_device.reset_fences(&[frame_sync.in_flight_fence]).unwrap();
-
-// 					let (image_idx, _) = swapchain_fn.acquire_next_image(
-// 						vk_swapchain,
-// 						timeout_ns,
-// 						frame_sync.image_available_semaphore,
-// 						vk::Fence::null()
-// 					).unwrap();
-
-// 					// Build the command buffer
-// 					{
-// 						let cmd_buffer = vk_cmd_buffers[frame_number];
-// 						let swapchain_image = swapchain_images[image_idx as usize];
-// 						let swapchain_image_view = swapchain_image_views[image_idx as usize];
-
-// 						let begin_info = vk::CommandBufferBeginInfo::default()
-// 							.flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-// 						vk_device.begin_command_buffer(cmd_buffer, &begin_info).unwrap();
-
-// 						vk_device.cmd_pipeline_barrier2(
-// 							cmd_buffer,
-// 							&vk::DependencyInfo::default()
-// 								.image_memory_barriers(&[
-// 									vk::ImageMemoryBarrier2::default()
-// 										.image(swapchain_image)
-// 										.old_layout(vk::ImageLayout::UNDEFINED)
-// 										.new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
-
-// 										.src_stage_mask(vk::PipelineStageFlags2::NONE)
-// 										.src_access_mask(vk::AccessFlags2::NONE)
-
-// 										.dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-// 										.dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-// 										.subresource_range(
-// 											vk::ImageSubresourceRange::default()
-// 												.aspect_mask(vk::ImageAspectFlags::COLOR)
-// 												.base_mip_level(0)
-// 												.base_array_layer(0)
-// 												.level_count(1)
-// 												.layer_count(1)
-// 										)
-// 								]
-// 							)
-// 						);
-
-// 						let color_attachments = [
-// 							vk::RenderingAttachmentInfo::default()
-// 								.image_view(swapchain_image_view)
-// 								.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-// 								.load_op(vk::AttachmentLoadOp::CLEAR)
-// 								.store_op(vk::AttachmentStoreOp::STORE)
-// 								.clear_value(vk::ClearValue {
-// 									color: vk::ClearColorValue {
-// 										float32: match frame_number {
-// 											0 => [1.0, 0.5, 1.0, 1.0],
-// 											1 => [0.5, 1.0, 1.0, 1.0],
-// 											2 => [1.0, 1.0, 0.5, 1.0],
-// 											_ => [0.0; 4]
-// 										}
-// 									},
-// 								})
-// 						];
-
-// 						let render_info = vk::RenderingInfo::default()
-// 							.layer_count(1)
-// 							.render_area(vk::Rect2D {
-// 								offset: vk::Offset2D { x: 0, y: 0 },
-// 								extent: swapchain_extent,
-// 							})
-// 							.color_attachments(&color_attachments);
-
-// 						vk_device.cmd_begin_rendering(cmd_buffer, &render_info);
-
-// 						vk_device.cmd_bind_pipeline(cmd_buffer, vk::PipelineBindPoint::GRAPHICS, vk_pipeline);
-// 						vk_device.cmd_draw(cmd_buffer, 3, 1, 0, 0);
-
-// 						vk_device.cmd_end_rendering(cmd_buffer);
-
-// 						vk_device.cmd_pipeline_barrier2(
-// 							cmd_buffer,
-// 							&vk::DependencyInfo::default()
-// 								.image_memory_barriers(&[
-// 									vk::ImageMemoryBarrier2::default()
-// 										.image(swapchain_image)
-// 										.old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
-// 										.new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-
-// 										.src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-// 										.src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-
-// 										.dst_stage_mask(vk::PipelineStageFlags2::NONE)
-// 										.dst_access_mask(vk::AccessFlags2::NONE)
-// 										.subresource_range(
-// 											vk::ImageSubresourceRange::default()
-// 												.aspect_mask(vk::ImageAspectFlags::COLOR)
-// 												.base_mip_level(0)
-// 												.base_array_layer(0)
-// 												.level_count(1)
-// 												.layer_count(1)
-// 										)
-// 								]
-// 							)
-// 						);
-
-// 						vk_device.end_command_buffer(cmd_buffer).unwrap();
-// 					}
-
-// 					vk_device.queue_submit(vk_graphics_queue,
-// 						&[vk::SubmitInfo::default()
-// 							.command_buffers(&[vk_cmd_buffers[image_idx as usize]])
-// 							.wait_semaphores(&[frame_sync.image_available_semaphore])
-// 							.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-// 							.signal_semaphores(&[frame_sync.submit_finish_semaphore])
-// 						],
-// 						frame_sync.in_flight_fence
-// 					).unwrap();
-
-// 					swapchain_fn.queue_present(vk_graphics_queue,
-// 						&vk::PresentInfoKHR::default()
-// 							.swapchains(&[vk_swapchain])
-// 							.image_indices(&[image_idx])
-// 							.wait_semaphores(&[frame_sync.submit_finish_semaphore])
-// 					).unwrap();
-
-// 					frame_number = (frame_number + 1) % sync_objects.len();
-// 				}
-// 			}
-
 // 			// Event::WindowEvent { event: WindowEvent::CloseRequested
 // 			// 	| WindowEvent::KeyboardInput{ input: KeyboardInput {
 // 			// 		state: ElementState::Pressed,
@@ -337,9 +162,6 @@ fn main() -> anyhow::Result<()> {
 // 			}
 // 			_ => {}
 // 		}
-
-// 	})
-// }
 
 
 
@@ -380,6 +202,7 @@ impl ApplicationHandler for App {
 
 			WindowEvent::RedrawRequested => {
 				let presentable_surface = self.presentable_surface.as_mut().unwrap();
+				let window = self.window.as_ref().unwrap();
 
 				let frame = presentable_surface.start_frame(&self.gfx_core).unwrap();
 
@@ -414,9 +237,10 @@ impl ApplicationHandler for App {
 				}
 
 
-				// window.pre_present_notify();
-
+				window.pre_present_notify();
 				presentable_surface.submit_frame(&self.gfx_core, frame).unwrap();
+
+				window.request_redraw();
 			}
 			_ => (),
 		}
@@ -430,7 +254,7 @@ struct FrameSync {
 	image_available_semaphore: vk::Semaphore,
 	submit_finish_semaphore: vk::Semaphore,
 
-	next_wait_timeline_value: u64,
+	prev_submit_timeline_value: u64,
 }
 
 pub struct PresentableSurface {
@@ -548,7 +372,7 @@ impl PresentableSurface {
 				anyhow::Result::Ok(FrameSync {
 					image_available_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
 					submit_finish_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
-					next_wait_timeline_value: 0,
+					prev_submit_timeline_value: 0,
 				})
 			})
 			.collect::<anyhow::Result<Vec<_>>>()?;
@@ -582,7 +406,7 @@ impl PresentableSurface {
 			core.vk_device.wait_semaphores(
 				&vk::SemaphoreWaitInfo::default()
 					.semaphores(&[core.vk_timeline_semaphore])
-					.values(&[frame_sync.next_wait_timeline_value]),
+					.values(&[frame_sync.prev_submit_timeline_value]),
 				timeout_ns
 			)?;
 		}
@@ -611,14 +435,14 @@ impl PresentableSurface {
 					.image_memory_barriers(&[
 						vk::ImageMemoryBarrier2::default()
 							.image(vk_swapchain_image)
-							.old_layout(vk::ImageLayout::UNDEFINED)
+							.old_layout(vk::ImageLayout::UNDEFINED) // Don't care about previous contents
 							.new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
 
-							.src_stage_mask(vk::PipelineStageFlags2::NONE)
+							.src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT) // Don't stall any pre-rasterisation stages
 							.src_access_mask(vk::AccessFlags2::NONE)
 
 							.dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-							.dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+							.dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
 							.subresource_range(
 								vk::ImageSubresourceRange::default()
 									.aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -659,6 +483,7 @@ impl PresentableSurface {
 							.src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
 							.src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
 
+							// Don't wait for anything, vkQueuePresentKHR performs visibility operations automatically
 							.dst_stage_mask(vk::PipelineStageFlags2::NONE)
 							.dst_access_mask(vk::AccessFlags2::NONE)
 							.subresource_range(
@@ -676,7 +501,7 @@ impl PresentableSurface {
 			core.vk_device.end_command_buffer(frame.vk_cmd_buffer)?;
 
 			let timeline_value = core.next_timeline_value();
-			frame_sync.next_wait_timeline_value = timeline_value;
+			frame_sync.prev_submit_timeline_value = timeline_value;
 
 			core.vk_device.queue_submit(
 				core.vk_queue,
@@ -684,7 +509,7 @@ impl PresentableSurface {
 					vk::SubmitInfo::default()
 						.command_buffers(&[frame.vk_cmd_buffer])
 						.wait_semaphores(&[frame_sync.image_available_semaphore])
-						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT]) // Synchronise with only raster stages of next frame
 						.signal_semaphores(&[core.vk_timeline_semaphore, frame_sync.submit_finish_semaphore])
 						.push_next(&mut vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&[timeline_value, 1]))
 				],
