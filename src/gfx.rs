@@ -11,18 +11,20 @@ pub struct Core {
 	display_handle: OwnedDisplayHandle,
 
 	vk_entry: ash::Entry,
-	vk_instance: ash::Instance,
-	vk_device: ash::Device,
+	pub vk_instance: ash::Instance,
+	pub vk_device: ash::Device,
+	pub vk_physical_device: vk::PhysicalDevice,
 
-	vk_queue: vk::Queue,
-	vk_cmd_pool: vk::CommandPool,
+	pub vk_queue: vk::Queue,
+	pub vk_cmd_pool: vk::CommandPool,
+	pub vk_timeline_semaphore: vk::Semaphore,
 
 	vk_debug_messenger: vk::DebugUtilsMessengerEXT,
 
 	debug_util_fns: ash::ext::debug_utils::Instance,
-	surface_fns: ash::khr::surface::Instance,
+	pub surface_fns: ash::khr::surface::Instance,
 
-	swapchain_fns: ash::khr::swapchain::Device,
+	pub swapchain_fns: ash::khr::swapchain::Device,
 }
 
 impl Core {
@@ -107,6 +109,14 @@ impl Core {
 			vk_device.create_command_pool(&create_info, None)?
 		};
 
+		let vk_timeline_semaphore = unsafe {
+			let timeline_create_info = vk::SemaphoreTypeCreateInfo::default()
+				.semaphore_type(vk::SemaphoreType::TIMELINE)
+				.initial_value(0);
+
+			vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut timeline_create_info), None)
+		};
+
 		let surface_fns = ash::khr::surface::Instance::new(&vk_entry, &vk_instance);
 		let swapchain_fns = ash::khr::swapchain::Device::new(&vk_instance, &vk_device);
 
@@ -118,9 +128,11 @@ impl Core {
 			vk_entry,
 			vk_instance,
 			vk_device,
+			vk_physical_device,
 
 			vk_queue,
 			vk_cmd_pool,
+			vk_timeline_semaphore,
 
 			vk_debug_messenger,
 
@@ -135,6 +147,13 @@ impl Core {
 		let window_handle = window_handle.window_handle()?.as_raw();
 		unsafe {
 			ash_window::create_surface(&self.vk_entry, &self.vk_instance, display_handle, window_handle, None)
+				.map_err(Into::into)
+		}
+	}
+
+	pub fn get_surface_capabilities(&self, surface: vk::SurfaceKHR) -> anyhow::Result<vk::SurfaceCapabilitiesKHR> {
+		unsafe {
+			self.surface_fns.get_physical_device_surface_capabilities(self.vk_physical_device, surface)
 				.map_err(Into::into)
 		}
 	}

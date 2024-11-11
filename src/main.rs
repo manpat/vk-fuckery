@@ -1,6 +1,6 @@
 use winit::{
 	application::ApplicationHandler,
-	event::{WindowEvent, ElementState},
+	event::{WindowEvent, /*ElementState*/},
 	event_loop::{EventLoop, ActiveEventLoop, ControlFlow},
 	window::{Window, WindowId},
 	dpi::LogicalSize,
@@ -38,101 +38,7 @@ fn main() -> anyhow::Result<()> {
 // fn main_2() -> anyhow::Result<()> {
 
 
-// 	// Surface
-// 	let surface_instance_fn = ash::khr::surface::Instance::new(&entry, &vk_instance);
-// 	let vk_surface = unsafe {
-// 		ash_window::create_surface(&entry, &vk_instance, display_handle, window.window_handle()?, None)?
-// 	};
 
-// 	// Swapchain
-// 	let swapchain_fn = ash::khr::swapchain::Device::new(&vk_instance, &vk_device);
-// 	let swapchain_capabilities = unsafe {
-// 		surface_instance_fn.get_physical_device_surface_capabilities(vk_physical_device, vk_surface)?
-// 	};
-
-// 	const NO_CURRENT_EXTENT: vk::Extent2D = vk::Extent2D{ width: u32::MAX, height: u32::MAX };
-// 	let swapchain_extent = match swapchain_capabilities.current_extent {
-// 		NO_CURRENT_EXTENT => {
-// 			let (width, height) = window.inner_size().into();
-// 			vk::Extent2D{ width, height }
-// 		},
-
-// 		current => current,
-// 	};
-
-// 	let vk_swapchain = unsafe {
-// 		let supported_formats = surface_instance_fn.get_physical_device_surface_formats(vk_physical_device, vk_surface)?;
-// 		let supported_present_modes = surface_instance_fn.get_physical_device_surface_present_modes(vk_physical_device, vk_surface)?;
-// 		dbg!(swapchain_capabilities, supported_formats, &supported_present_modes);
-
-// 		assert!(supported_present_modes.contains(&vk::PresentModeKHR::FIFO));
-
-// 		let max_images = match swapchain_capabilities.max_image_count {
-// 			0 => u32::MAX,
-// 			n => n
-// 		};
-
-// 		let num_images = (swapchain_capabilities.min_image_count + 1).min(max_images);
-
-// 		let create_info = vk::SwapchainCreateInfoKHR::default()
-// 			.surface(vk_surface)
-// 			.min_image_count(num_images)
-// 			// TODO(pat.m): get these from supported_formats
-// 			.image_format(vk::Format::B8G8R8A8_SRGB)
-// 			.image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
-// 			.image_extent(swapchain_extent)
-// 			.image_array_layers(1)
-// 			.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-// 			.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-// 			.pre_transform(swapchain_capabilities.current_transform)
-// 			.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-// 			// TODO(pat.m): get this from supported_present_modes
-// 			.present_mode(vk::PresentModeKHR::FIFO)
-// 			.clipped(true);
-
-// 		swapchain_fn.create_swapchain(&create_info, None)?
-// 	};
-
-// 	// Swapchain images
-// 	let swapchain_images = unsafe { swapchain_fn.get_swapchain_images(vk_swapchain)? };
-
-// 	let swapchain_image_views: Vec<_> = swapchain_images.iter()
-// 		.map(|&image| unsafe {
-// 			let create_info = vk::ImageViewCreateInfo::default()
-// 				.image(image)
-// 				.view_type(vk::ImageViewType::TYPE_2D)
-// 				.format(vk::Format::B8G8R8A8_SRGB)
-// 				.components(
-// 					vk::ComponentMapping {
-// 						r: vk::ComponentSwizzle::R,
-// 						g: vk::ComponentSwizzle::G,
-// 						b: vk::ComponentSwizzle::B,
-// 						a: vk::ComponentSwizzle::A,
-// 					}
-// 				)
-// 				.subresource_range(
-// 					vk::ImageSubresourceRange::default()
-// 						.aspect_mask(vk::ImageAspectFlags::COLOR)
-// 						.base_mip_level(0)
-// 						.base_array_layer(0)
-// 						.level_count(1)
-// 						.layer_count(1)
-// 				);
-
-// 			vk_device.create_image_view(&create_info, None).unwrap()
-// 		})
-// 		.collect();
-
-
-// 	// Command pool and command buffers
-// 	let vk_cmd_buffers = unsafe {
-// 		let create_info = vk::CommandBufferAllocateInfo::default()
-// 			.command_buffer_count(swapchain_images.len() as u32)
-// 			.command_pool(vk_cmd_pool)
-// 			.level(vk::CommandBufferLevel::PRIMARY);
-
-// 		vk_device.allocate_command_buffers(&create_info)?
-// 	};
 
 
 // 	// Load shaders
@@ -440,6 +346,7 @@ fn main() -> anyhow::Result<()> {
 struct App {
 	gfx_core: gfx::Core,
 	window: Option<Window>,
+	presentable_surface: Option<PresentableSurface>,
 }
 
 impl App {
@@ -447,6 +354,7 @@ impl App {
 		App {
 			gfx_core,
 			window: None,
+			presentable_surface: None,
 		}
 	}
 }
@@ -458,9 +366,44 @@ impl ApplicationHandler for App {
 			.with_inner_size(LogicalSize::new(1024, 768));
 
 		let window = event_loop.create_window(window_attrs).unwrap();
-		let _surface = self.gfx_core.create_surface(&window).unwrap();
+		let presentable_surface = PresentableSurface::new(&self.gfx_core, &window).unwrap();
+
+		let frame = presentable_surface.start_frame(&self.gfx_core).unwrap();
+
+		unsafe {
+			let color_attachments = [
+				vk::RenderingAttachmentInfo::default()
+					.image_view(frame.vk_swapchain_image_view)
+					.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+					.load_op(vk::AttachmentLoadOp::CLEAR)
+					.store_op(vk::AttachmentStoreOp::STORE)
+					.clear_value(vk::ClearValue {
+						color: vk::ClearColorValue {
+							float32: [1.0, 0.5, 1.0, 1.0],
+						},
+					})
+			];
+
+			let render_info = vk::RenderingInfo::default()
+				.layer_count(1)
+				.render_area(vk::Rect2D {
+					offset: vk::Offset2D { x: 0, y: 0 },
+					extent: presentable_surface.swapchain_extent,
+				})
+				.color_attachments(&color_attachments);
+
+			self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
+
+			// self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, vk_pipeline);
+			// self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
+
+			self.gfx_core.vk_device.cmd_end_rendering(frame.vk_cmd_buffer);
+		}
+
+		presentable_surface.submit_frame(&self.gfx_core, frame).unwrap();
 
 		self.window = Some(window);
+		self.presentable_surface = Some(presentable_surface);
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -490,4 +433,251 @@ impl ApplicationHandler for App {
 	}
 }
 
-pub fn default<T: Default>() -> T { T::default() }
+
+use ash::vk;
+
+pub struct PresentableSurface {
+	vk_surface: vk::SurfaceKHR,
+
+	vk_swapchain: vk::SwapchainKHR,
+	vk_swapchain_images: Vec<vk::Image>,
+	vk_swapchain_image_views: Vec<vk::ImageView>,
+	vk_image_available_semaphores: Vec<vk::Semaphore>,
+
+	vk_cmd_buffers: Vec<vk::CommandBuffer>,
+
+	swapchain_extent: vk::Extent2D,
+	frame_number: usize,
+}
+
+impl PresentableSurface {
+	fn new(core: &gfx::Core, window: &Window) -> anyhow::Result<PresentableSurface> {
+		let vk_surface = core.create_surface(&window)?;
+
+		// Swapchain
+		let swapchain_capabilities = core.get_surface_capabilities(vk_surface)?;
+
+		const NO_CURRENT_EXTENT: vk::Extent2D = vk::Extent2D{ width: u32::MAX, height: u32::MAX };
+		let swapchain_extent = match swapchain_capabilities.current_extent {
+			NO_CURRENT_EXTENT => {
+				let (width, height) = window.inner_size().into();
+				vk::Extent2D{ width, height }
+			},
+
+			current => current,
+		};
+
+		let vk_swapchain = unsafe {
+			let supported_formats = core.surface_fns.get_physical_device_surface_formats(core.vk_physical_device, vk_surface)?;
+			let supported_present_modes = core.surface_fns.get_physical_device_surface_present_modes(core.vk_physical_device, vk_surface)?;
+
+			log::info!("Supported formats: {supported_formats:?}");
+			log::info!("Supported present modes: {supported_present_modes:?}");
+
+			dbg!(swapchain_capabilities, supported_formats, &supported_present_modes);
+
+			assert!(supported_present_modes.contains(&vk::PresentModeKHR::FIFO));
+
+			let max_images = match swapchain_capabilities.max_image_count {
+				0 => u32::MAX,
+				n => n
+			};
+
+			let num_images = (swapchain_capabilities.min_image_count + 1).min(max_images);
+
+			let create_info = vk::SwapchainCreateInfoKHR::default()
+				.surface(vk_surface)
+				.min_image_count(num_images)
+				// TODO(pat.m): get these from supported_formats
+				.image_format(vk::Format::B8G8R8A8_SRGB)
+				.image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+				.image_extent(swapchain_extent)
+				.image_array_layers(1)
+				.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+				.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+				.pre_transform(swapchain_capabilities.current_transform)
+				.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+				// TODO(pat.m): get this from supported_present_modes
+				.present_mode(vk::PresentModeKHR::FIFO)
+				.clipped(true);
+
+			core.swapchain_fns.create_swapchain(&create_info, None)?
+		};
+
+		// Swapchain images
+		let vk_swapchain_images = unsafe { core.swapchain_fns.get_swapchain_images(vk_swapchain)? };
+
+		let vk_swapchain_image_views: Vec<_> = vk_swapchain_images.iter()
+			.map(|&image| unsafe {
+				let create_info = vk::ImageViewCreateInfo::default()
+					.image(image)
+					.view_type(vk::ImageViewType::TYPE_2D)
+					.format(vk::Format::B8G8R8A8_SRGB)
+					.components(
+						vk::ComponentMapping {
+							r: vk::ComponentSwizzle::R,
+							g: vk::ComponentSwizzle::G,
+							b: vk::ComponentSwizzle::B,
+							a: vk::ComponentSwizzle::A,
+						}
+					)
+					.subresource_range(
+						vk::ImageSubresourceRange::default()
+							.aspect_mask(vk::ImageAspectFlags::COLOR)
+							.base_mip_level(0)
+							.base_array_layer(0)
+							.level_count(1)
+							.layer_count(1)
+					);
+
+				core.vk_device.create_image_view(&create_info, None).unwrap()
+			})
+			.collect();
+
+
+		// command buffers
+		let vk_cmd_buffers = unsafe {
+			let create_info = vk::CommandBufferAllocateInfo::default()
+				.command_buffer_count(vk_swapchain_images.len() as u32)
+				.command_pool(core.vk_cmd_pool)
+				.level(vk::CommandBufferLevel::PRIMARY);
+
+			core.vk_device.allocate_command_buffers(&create_info)?
+		};
+
+		Ok(PresentableSurface {
+			vk_surface,
+
+			vk_swapchain,
+			vk_swapchain_images,
+			vk_swapchain_image_views,
+
+			vk_cmd_buffers,
+
+			swapchain_extent,
+			frame_number: 0,
+		})
+	}
+
+	fn start_frame(&self, core: &gfx::Core) -> anyhow::Result<Frame> {
+		let timeout_ns = 1000*1000*1000;
+		let (image_idx, _) = unsafe {
+			core.swapchain_fns.acquire_next_image(
+				self.vk_swapchain,
+				timeout_ns,
+				vk::Semaphore::null(),
+				vk::Fence::null()
+			)?
+		};
+
+		let image_idx = image_idx as usize;
+		let vk_cmd_buffer = self.vk_cmd_buffers[image_idx];
+		let vk_swapchain_image = self.vk_swapchain_images[image_idx];
+		let vk_swapchain_image_view = self.vk_swapchain_image_views[image_idx];
+
+		unsafe {
+			core.vk_device.begin_command_buffer(vk_cmd_buffer,
+				&vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT))?;
+
+			core.vk_device.cmd_pipeline_barrier2(
+				vk_cmd_buffer,
+				&vk::DependencyInfo::default()
+					.image_memory_barriers(&[
+						vk::ImageMemoryBarrier2::default()
+							.image(vk_swapchain_image)
+							.old_layout(vk::ImageLayout::UNDEFINED)
+							.new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
+
+							.src_stage_mask(vk::PipelineStageFlags2::NONE)
+							.src_access_mask(vk::AccessFlags2::NONE)
+
+							.dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+							.dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+							.subresource_range(
+								vk::ImageSubresourceRange::default()
+									.aspect_mask(vk::ImageAspectFlags::COLOR)
+									.base_mip_level(0)
+									.base_array_layer(0)
+									.level_count(1)
+									.layer_count(1)
+							)
+					]
+				)
+			);
+
+		}
+
+		Ok(Frame {
+			vk_swapchain_image,
+			vk_swapchain_image_view,
+			vk_cmd_buffer,
+
+			image_idx,
+		})
+	}
+
+	fn submit_frame(&self, core: &gfx::Core, frame: Frame) -> anyhow::Result<()> {
+		unsafe {
+			core.vk_device.cmd_pipeline_barrier2(
+				frame.vk_cmd_buffer,
+				&vk::DependencyInfo::default()
+					.image_memory_barriers(&[
+						vk::ImageMemoryBarrier2::default()
+							.image(frame.vk_swapchain_image)
+							.old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
+							.new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+
+							.src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+							.src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+
+							.dst_stage_mask(vk::PipelineStageFlags2::NONE)
+							.dst_access_mask(vk::AccessFlags2::NONE)
+							.subresource_range(
+								vk::ImageSubresourceRange::default()
+									.aspect_mask(vk::ImageAspectFlags::COLOR)
+									.base_mip_level(0)
+									.base_array_layer(0)
+									.level_count(1)
+									.layer_count(1)
+							)
+					]
+				)
+			);
+
+			core.vk_device.queue_submit(
+				core.vk_queue,
+				&[vk::SubmitInfo::default()
+					.command_buffers(&[frame.vk_cmd_buffer])
+					// .wait_semaphores(&[frame_sync.image_available])
+					.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+					// .signal_semaphores(&[frame_sync.render_finished])
+				],
+				// frame_sync.in_flight_fence
+				vk::Fence::null()
+			)?;
+
+			core.vk_device.device_wait_idle()?;
+
+			core.swapchain_fns.queue_present(
+				core.vk_queue,
+				&vk::PresentInfoKHR::default()
+					.swapchains(&[self.vk_swapchain])
+					.image_indices(&[frame.image_idx as u32])
+					// .wait_semaphores(&[frame_sync.render_finished])
+			)?;
+
+			core.vk_device.end_command_buffer(frame.vk_cmd_buffer)?;
+		}
+
+		Ok(())
+	}
+}
+
+
+pub struct Frame {
+	vk_swapchain_image: vk::Image,
+	vk_swapchain_image_view: vk::ImageView,
+	vk_cmd_buffer: vk::CommandBuffer,
+
+	image_idx: usize,
+}
