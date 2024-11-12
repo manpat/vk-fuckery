@@ -90,24 +90,9 @@ impl ApplicationHandler for App {
 			let ia_state = vk::PipelineInputAssemblyStateCreateInfo::default()
 				.topology(vk::PrimitiveTopology::TRIANGLE_LIST);
 
-			let viewports = [vk::Viewport {
-				x: 0.0,
-				y: 0.0,
-				width: presentable_surface.swapchain_extent.width as f32,
-				height: presentable_surface.swapchain_extent.height as f32,
-				min_depth: 0.0,
-				max_depth: 1.0,
-			}];
-
-			let scissors = [vk::Rect2D {
-				offset: vk::Offset2D { x: 0, y: 0 },
-				extent: presentable_surface.swapchain_extent,
-			}];
-
-			// TODO(pat.m): this should be dynamic
 			let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-				.scissors(&scissors)
-				.viewports(&viewports);
+				.scissor_count(1)
+				.viewport_count(1);
 
 			let raster_state = vk::PipelineRasterizationStateCreateInfo::default()
 				.cull_mode(vk::CullModeFlags::BACK)
@@ -118,6 +103,14 @@ impl ApplicationHandler for App {
 			// TODO(pat.m): this should probably also be dynamic
 			let ms_state = vk::PipelineMultisampleStateCreateInfo::default()
 				.rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+			let dynamic_states = [
+				vk::DynamicState::VIEWPORT,
+				vk::DynamicState::SCISSOR,
+			];
+
+			let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
+				.dynamic_states(&dynamic_states);
 
 			let vk_pipeline_layout = self.gfx_core.vk_device.create_pipeline_layout(&Default::default(), None).unwrap();
 
@@ -130,6 +123,7 @@ impl ApplicationHandler for App {
 					.viewport_state(&viewport_state)
 					.rasterization_state(&raster_state)
 					.multisample_state(&ms_state)
+					.dynamic_state(&dynamic_state)
 			];
 
 			let pipelines = self.gfx_core.vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None).unwrap();
@@ -183,6 +177,21 @@ impl ApplicationHandler for App {
 
 					self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
 
+					// Set dynamic state
+					self.gfx_core.vk_device.cmd_set_viewport(frame.vk_cmd_buffer, 0, &[vk::Viewport {
+						x: 0.0, y: 0.0,
+						width: presentable_surface.swapchain_extent.width as f32,
+						height: presentable_surface.swapchain_extent.height as f32,
+						min_depth: 0.0,
+						max_depth: 1.0,
+					}]);
+
+					self.gfx_core.vk_device.cmd_set_scissor(frame.vk_cmd_buffer, 0, &[vk::Rect2D {
+						offset: vk::Offset2D { x: 0, y: 0 },
+						extent: presentable_surface.swapchain_extent,
+					}]);
+
+					// Draw
 					self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
 					self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
 
