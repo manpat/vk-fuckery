@@ -38,100 +38,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 
-// 	// Load shaders
-// 	fn create_shader_module(device: &ash::Device, path: impl AsRef<std::path::Path>) -> anyhow::Result<vk::ShaderModule> {
-// 		let contents = std::fs::read(path)?;
-// 		anyhow::ensure!(contents.len() % 4 == 0);
-
-// 		unsafe {
-// 			let contents = std::slice::from_raw_parts(contents.as_ptr().cast(), contents.len()/4);
-
-// 			let create_info = vk::ShaderModuleCreateInfo::default()
-// 				.code(contents);
-
-// 			Ok(device.create_shader_module(&create_info, None)?)
-// 		}
-// 	}
-
-// 	let vert_sh = create_shader_module(&vk_device, "shaders/main.vs.spv").unwrap();
-// 	let frag_sh = create_shader_module(&vk_device, "shaders/main.fs.spv").unwrap();
-
-// 	let vk_pipeline_layout = unsafe {
-// 		vk_device.create_pipeline_layout(
-// 			&vk::PipelineLayoutCreateInfo::default(),
-// 			None
-// 		)?
-// 	};
-
-// 	let vk_pipeline = unsafe {
-// 		let shader_stages = [
-// 			vk::PipelineShaderStageCreateInfo::default()
-// 				.module(vert_sh)
-// 				.name(c"main")
-// 				.stage(vk::ShaderStageFlags::VERTEX),
-
-// 			vk::PipelineShaderStageCreateInfo::default()
-// 				.module(frag_sh)
-// 				.name(c"main")
-// 				.stage(vk::ShaderStageFlags::FRAGMENT),
-// 		];
-
-// 		let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
-
-// 		let ia_state = vk::PipelineInputAssemblyStateCreateInfo::default()
-// 			.topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-
-// 		let viewports = [vk::Viewport {
-// 			x: 0.0,
-// 			y: 0.0,
-// 			width: swapchain_extent.width as f32,
-// 			height: swapchain_extent.height as f32,
-// 			min_depth: 0.0,
-// 			max_depth: 1.0,
-// 		}];
-
-// 		let scissors = [vk::Rect2D {
-// 			offset: vk::Offset2D { x: 0, y: 0 },
-// 			extent: swapchain_extent,
-// 		}];
-
-// 		let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-// 			.scissors(&scissors)
-// 			.viewports(&viewports);
-
-// 		let raster_state = vk::PipelineRasterizationStateCreateInfo::default()
-// 			.cull_mode(vk::CullModeFlags::BACK)
-// 			.front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-// 			.polygon_mode(vk::PolygonMode::FILL)
-// 			.line_width(1.0);
-
-// 		let ms_state = vk::PipelineMultisampleStateCreateInfo::default()
-// 			.rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-// 		let graphic_pipeline_create_infos = [
-// 			vk::GraphicsPipelineCreateInfo::default()
-// 				.stages(&shader_stages)
-// 				.layout(vk_pipeline_layout)
-// 				.vertex_input_state(&vertex_input_state)
-// 				.input_assembly_state(&ia_state)
-// 				.viewport_state(&viewport_state)
-// 				.rasterization_state(&raster_state)
-// 				.multisample_state(&ms_state)
-// 		];
-
-// 		let pipelines = vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None).unwrap();
-
-// 		vk_device.destroy_shader_module(vert_sh, None);
-// 		vk_device.destroy_shader_module(frag_sh, None);
-
-// 		pipelines[0]
-// 	};
 
 
 struct App {
 	gfx_core: gfx::Core,
 	window: Option<Window>,
 	presentable_surface: Option<PresentableSurface>,
+
+	vk_pipeline: vk::Pipeline,
 }
 
 impl App {
@@ -140,6 +54,7 @@ impl App {
 			gfx_core,
 			window: None,
 			presentable_surface: None,
+			vk_pipeline: vk::Pipeline::null(),
 		}
 	}
 }
@@ -153,8 +68,83 @@ impl ApplicationHandler for App {
 		let window = event_loop.create_window(window_attrs).unwrap();
 		let presentable_surface = PresentableSurface::new(&self.gfx_core, &window).unwrap();
 
+		let vert_sh = create_shader_module(&self.gfx_core.vk_device, "shaders/main.vs.spv").unwrap();
+		let frag_sh = create_shader_module(&self.gfx_core.vk_device, "shaders/main.fs.spv").unwrap();
+
+
+		let vk_pipeline = unsafe {
+			let shader_stages = [
+				vk::PipelineShaderStageCreateInfo::default()
+					.module(vert_sh)
+					.name(c"main")
+					.stage(vk::ShaderStageFlags::VERTEX),
+
+				vk::PipelineShaderStageCreateInfo::default()
+					.module(frag_sh)
+					.name(c"main")
+					.stage(vk::ShaderStageFlags::FRAGMENT),
+			];
+
+			let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+
+			let ia_state = vk::PipelineInputAssemblyStateCreateInfo::default()
+				.topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+			let viewports = [vk::Viewport {
+				x: 0.0,
+				y: 0.0,
+				width: presentable_surface.swapchain_extent.width as f32,
+				height: presentable_surface.swapchain_extent.height as f32,
+				min_depth: 0.0,
+				max_depth: 1.0,
+			}];
+
+			let scissors = [vk::Rect2D {
+				offset: vk::Offset2D { x: 0, y: 0 },
+				extent: presentable_surface.swapchain_extent,
+			}];
+
+			// TODO(pat.m): this should be dynamic
+			let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+				.scissors(&scissors)
+				.viewports(&viewports);
+
+			let raster_state = vk::PipelineRasterizationStateCreateInfo::default()
+				.cull_mode(vk::CullModeFlags::BACK)
+				.front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+				.polygon_mode(vk::PolygonMode::FILL)
+				.line_width(1.0);
+
+			// TODO(pat.m): this should probably also be dynamic
+			let ms_state = vk::PipelineMultisampleStateCreateInfo::default()
+				.rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+			let vk_pipeline_layout = self.gfx_core.vk_device.create_pipeline_layout(&Default::default(), None).unwrap();
+
+			let graphic_pipeline_create_infos = [
+				vk::GraphicsPipelineCreateInfo::default()
+					.stages(&shader_stages)
+					.layout(vk_pipeline_layout)
+					.vertex_input_state(&vertex_input_state)
+					.input_assembly_state(&ia_state)
+					.viewport_state(&viewport_state)
+					.rasterization_state(&raster_state)
+					.multisample_state(&ms_state)
+			];
+
+			let pipelines = self.gfx_core.vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None).unwrap();
+
+			self.gfx_core.vk_device.destroy_shader_module(vert_sh, None);
+			self.gfx_core.vk_device.destroy_shader_module(frag_sh, None);
+
+			self.gfx_core.vk_device.destroy_pipeline_layout(vk_pipeline_layout, None);
+
+			pipelines[0]
+		};
+
 		self.window = Some(window);
 		self.presentable_surface = Some(presentable_surface);
+		self.vk_pipeline = vk_pipeline;
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -193,8 +183,8 @@ impl ApplicationHandler for App {
 
 					self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
 
-					// self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, vk_pipeline);
-					// self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
+					self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
+					self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
 
 					self.gfx_core.vk_device.cmd_end_rendering(frame.vk_cmd_buffer);
 				}
@@ -210,6 +200,12 @@ impl ApplicationHandler for App {
 	}
 
 	fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+		self.gfx_core.wait_idle();
+
+		unsafe {
+			self.gfx_core.vk_device.destroy_pipeline(self.vk_pipeline, None);
+		}
+
 		if let Some(presentable_surface) = self.presentable_surface.take() {
 			presentable_surface.destroy(&self.gfx_core);
 		}
@@ -584,4 +580,20 @@ pub struct Frame {
 
 	sync_index: usize,
 	image_index: usize,
+}
+
+
+
+fn create_shader_module(device: &ash::Device, path: impl AsRef<std::path::Path>) -> anyhow::Result<vk::ShaderModule> {
+	let contents = std::fs::read(path)?;
+	anyhow::ensure!(contents.len() % 4 == 0);
+
+	unsafe {
+		let contents = std::slice::from_raw_parts(contents.as_ptr().cast(), contents.len()/4);
+
+		let create_info = vk::ShaderModuleCreateInfo::default()
+			.code(contents);
+
+		Ok(device.create_shader_module(&create_info, None)?)
+	}
 }
