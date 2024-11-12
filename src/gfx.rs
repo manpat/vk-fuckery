@@ -183,6 +183,8 @@ impl Drop for Core {
 			// TODO(pat.m): destroy swapchains
 			// TODO(pat.m): destroy surfaces
 
+			self.vk_device.destroy_semaphore(self.vk_timeline_semaphore, None);
+
 			self.vk_device.destroy_command_pool(self.vk_cmd_pool, None);
 			self.vk_device.destroy_device(None);
 

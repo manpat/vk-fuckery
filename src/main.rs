@@ -6,6 +6,8 @@ use winit::{
 	dpi::LogicalSize,
 };
 
+use anyhow::Context;
+
 // use ash::prelude::*;
 // use ash::vk;
 
@@ -144,9 +146,9 @@ fn main() -> anyhow::Result<()> {
 
 // 				vk_device.destroy_command_pool(vk_cmd_pool, None);
 
-// 				for &Sync{image_available_semaphore, submit_finish_semaphore, in_flight_fence} in sync_objects.iter() {
+// 				for &Sync{image_available_semaphore, raster_finish_semaphore, in_flight_fence} in sync_objects.iter() {
 // 					vk_device.destroy_semaphore(image_available_semaphore, None);
-// 					vk_device.destroy_semaphore(submit_finish_semaphore, None);
+// 					vk_device.destroy_semaphore(raster_finish_semaphore, None);
 // 					vk_device.destroy_fence(in_flight_fence, None);
 // 				}
 
@@ -245,6 +247,16 @@ impl ApplicationHandler for App {
 			_ => (),
 		}
 	}
+
+	fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+		if let Some(presentable_surface) = self.presentable_surface.take() {
+			unsafe {
+				self.gfx_core.vk_device.device_wait_idle().unwrap();
+			}
+
+			presentable_surface.destroy(&self.gfx_core);
+		}
+	}
 }
 
 
@@ -252,7 +264,7 @@ use ash::vk;
 
 struct FrameSync {
 	image_available_semaphore: vk::Semaphore,
-	submit_finish_semaphore: vk::Semaphore,
+	raster_finish_semaphore: vk::Semaphore,
 
 	prev_submit_timeline_value: u64,
 }
@@ -371,7 +383,7 @@ impl PresentableSurface {
 			.map(|_| unsafe {
 				anyhow::Result::Ok(FrameSync {
 					image_available_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
-					submit_finish_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
+					raster_finish_semaphore: core.vk_device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?,
 					prev_submit_timeline_value: 0,
 				})
 			})
@@ -391,6 +403,23 @@ impl PresentableSurface {
 
 			swapchain_extent,
 		})
+	}
+
+	fn destroy(self, core: &gfx::Core) {
+		unsafe {
+			core.vk_device.device_wait_idle().unwrap();
+
+			for image_view in self.vk_swapchain_image_views {
+				core.vk_device.destroy_image_view(image_view, None);
+			}
+			for frame_sync in self.frame_syncs {
+				core.vk_device.destroy_semaphore(frame_sync.image_available_semaphore, None);
+				core.vk_device.destroy_semaphore(frame_sync.raster_finish_semaphore, None);
+			}
+
+			core.swapchain_fns.destroy_swapchain(self.vk_swapchain, None);
+			core.surface_fns.destroy_surface(self.vk_surface, None);
+		}
 	}
 
 	fn start_frame(&mut self, core: &gfx::Core) -> anyhow::Result<Frame> {
@@ -417,7 +446,7 @@ impl PresentableSurface {
 				timeout_ns,
 				frame_sync.image_available_semaphore,
 				vk::Fence::null()
-			)?
+			).context("Acquiring swapchain image")?
 		};
 
 		let image_index = image_index as usize;
@@ -503,26 +532,44 @@ impl PresentableSurface {
 			let timeline_value = core.next_timeline_value();
 			frame_sync.prev_submit_timeline_value = timeline_value;
 
-			core.vk_device.queue_submit(
+			core.vk_device.queue_submit2(
 				core.vk_queue,
 				&[
-					vk::SubmitInfo::default()
-						.command_buffers(&[frame.vk_cmd_buffer])
-						.wait_semaphores(&[frame_sync.image_available_semaphore])
-						.wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT]) // Synchronise with only raster stages of next frame
-						.signal_semaphores(&[core.vk_timeline_semaphore, frame_sync.submit_finish_semaphore])
-						.push_next(&mut vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&[timeline_value, 1]))
+					vk::SubmitInfo2::default()
+						.wait_semaphore_infos(&[
+							// image available happens-before wait operation, which happens-before any raster output.
+							// i.e., don't block anything except raster while sema is unsignalled
+							vk::SemaphoreSubmitInfo::default()
+								.semaphore(frame_sync.image_available_semaphore)
+								.stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+						])
+						.command_buffer_infos(&[
+							vk::CommandBufferSubmitInfo::default()
+								.command_buffer(frame.vk_cmd_buffer)
+						])
+						.signal_semaphore_infos(&[
+							// raster output happens-before 'raster finish sema' signal operation, which happens-before later present.
+							vk::SemaphoreSubmitInfo::default()
+								.semaphore(frame_sync.raster_finish_semaphore)
+								.stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT),
+
+							// timeline semaphore signal op happens-after all commands complete, which happens-before the next frame where images and cmd buffers can be reused.
+							vk::SemaphoreSubmitInfo::default()
+								.semaphore(core.vk_timeline_semaphore)
+								.stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+								.value(timeline_value),
+						])
 				],
 				vk::Fence::null()
-			)?;
+			).context("Submit")?;
 
 			core.swapchain_fns.queue_present(
 				core.vk_queue,
 				&vk::PresentInfoKHR::default()
 					.swapchains(&[self.vk_swapchain])
 					.image_indices(&[frame.image_index as u32])
-					.wait_semaphores(&[frame_sync.submit_finish_semaphore])
-			)?;
+					.wait_semaphores(&[frame_sync.raster_finish_semaphore])
+			).context("Present to swapchain")?;
 		}
 
 		Ok(())
