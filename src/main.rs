@@ -127,45 +127,6 @@ fn main() -> anyhow::Result<()> {
 // 		pipelines[0]
 // 	};
 
-// 			// Event::WindowEvent { event: WindowEvent::CloseRequested
-// 			// 	| WindowEvent::KeyboardInput{ input: KeyboardInput {
-// 			// 		state: ElementState::Pressed,
-// 			// 		virtual_keycode: Some(VirtualKeyCode::Escape),
-// 			// 		..
-// 			// 	}, .. }, .. } =>
-// 			// {
-// 			// 	destroying = true;
-// 			// 	control_flow.set_exit();
-// 			// }
-
-// 			Event::LoopDestroyed => unsafe {
-// 				vk_device.device_wait_idle().unwrap();
-
-// 				vk_device.destroy_pipeline(vk_pipeline, None);
-// 				vk_device.destroy_pipeline_layout(vk_pipeline_layout, None);
-
-// 				vk_device.destroy_command_pool(vk_cmd_pool, None);
-
-// 				for &Sync{image_available_semaphore, raster_finish_semaphore, in_flight_fence} in sync_objects.iter() {
-// 					vk_device.destroy_semaphore(image_available_semaphore, None);
-// 					vk_device.destroy_semaphore(raster_finish_semaphore, None);
-// 					vk_device.destroy_fence(in_flight_fence, None);
-// 				}
-
-// 				for view in swapchain_image_views.iter() {
-// 					vk_device.destroy_image_view(*view, None);
-// 				}
-
-// 				swapchain_fn.destroy_swapchain(vk_swapchain, None);
-// 				surface_instance_fn.destroy_surface(vk_surface, None);
-// 				vk_device.destroy_device(None);
-// 				debug_utils.destroy_debug_utils_messenger(vk_messenger, None);
-// 				vk_instance.destroy_instance(None);
-// 			}
-// 			_ => {}
-// 		}
-
-
 
 struct App {
 	gfx_core: gfx::Core,
@@ -301,41 +262,84 @@ impl PresentableSurface {
 			current => current,
 		};
 
+		let supported_formats = unsafe{ core.surface_fns.get_physical_device_surface_formats(core.vk_physical_device, vk_surface)? };
+		let supported_present_modes = unsafe{ core.surface_fns.get_physical_device_surface_present_modes(core.vk_physical_device, vk_surface)? };
+
+		log::info!("Supported formats: {supported_formats:#?}");
+		log::info!("Supported present modes: {supported_present_modes:?}");
+
+		dbg!(&swapchain_capabilities, &supported_formats, &supported_present_modes);
+
+		let selected_present_mode = supported_present_modes.into_iter()
+			.max_by_key(|&mode| match mode {
+				vk::PresentModeKHR::FIFO => 1,
+				vk::PresentModeKHR::FIFO_RELAXED => 2,
+				vk::PresentModeKHR::MAILBOX => 10,
+				_ => 0,
+			})
+			.context("Selecting supported present mode")?;
+
+		let selected_format = supported_formats.into_iter()
+			.filter(|format| format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
+			.map(|format| format.format)
+			.max_by_key(|&format| match format {
+				vk::Format::R8G8B8A8_SRGB => 15,
+				vk::Format::B8G8R8A8_SRGB => 14,
+				vk::Format::A8B8G8R8_SRGB_PACK32 => 13,
+
+				vk::Format::R8G8B8A8_UNORM => 5,
+				vk::Format::B8G8R8A8_UNORM => 4,
+				vk::Format::A8B8G8R8_UNORM_PACK32 => 3,
+				_ => 0,
+			})
+			.context("Selecting supported swapchain format")?;
+
+		let selected_format_srgb = match selected_format {
+			vk::Format::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_SRGB,
+			vk::Format::B8G8R8A8_UNORM => vk::Format::B8G8R8A8_SRGB,
+			vk::Format::A8B8G8R8_UNORM_PACK32 => vk::Format::A8B8G8R8_SRGB_PACK32,
+			x => x,
+		};
+
+		let needs_mutable_format = selected_format != selected_format_srgb;
+
+		log::info!("Selected present mode: {selected_present_mode:?}");
+		log::info!("Selected swapchain format: {selected_format:?}");
+
 		let vk_swapchain = unsafe {
-			let supported_formats = core.surface_fns.get_physical_device_surface_formats(core.vk_physical_device, vk_surface)?;
-			let supported_present_modes = core.surface_fns.get_physical_device_surface_present_modes(core.vk_physical_device, vk_surface)?;
-
-			log::info!("Supported formats: {supported_formats:?}");
-			log::info!("Supported present modes: {supported_present_modes:?}");
-
-			dbg!(swapchain_capabilities, supported_formats, &supported_present_modes);
-
-			assert!(supported_present_modes.contains(&vk::PresentModeKHR::FIFO));
-
 			let max_images = match swapchain_capabilities.max_image_count {
 				0 => u32::MAX,
 				n => n
 			};
 
 			let num_images = (swapchain_capabilities.min_image_count + 1).min(max_images);
+			let swapchain_create_flags = if needs_mutable_format { vk::SwapchainCreateFlagsKHR::MUTABLE_FORMAT } else { vk::SwapchainCreateFlagsKHR::empty() };
+			let formats = [selected_format, selected_format_srgb];
 
-			let create_info = vk::SwapchainCreateInfoKHR::default()
-				.surface(vk_surface)
-				.min_image_count(num_images)
-				// TODO(pat.m): get these from supported_formats
-				.image_format(vk::Format::B8G8R8A8_SRGB)
-				.image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
-				.image_extent(swapchain_extent)
-				.image_array_layers(1)
-				.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-				.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-				.pre_transform(swapchain_capabilities.current_transform)
-				.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-				// TODO(pat.m): get this from supported_present_modes
-				.present_mode(vk::PresentModeKHR::FIFO)
-				.clipped(true);
-
-			core.swapchain_fns.create_swapchain(&create_info, None)?
+			core.swapchain_fns.create_swapchain(
+				&vk::SwapchainCreateInfoKHR::default()
+					.surface(vk_surface)
+					.min_image_count(num_images)
+					.flags(swapchain_create_flags)
+					.image_format(selected_format)
+					.image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+					.image_extent(swapchain_extent)
+					.image_array_layers(1)
+					.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+					.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+					.pre_transform(swapchain_capabilities.current_transform)
+					.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+					.present_mode(selected_present_mode)
+					.clipped(true)
+					.push_next(
+						&mut vk::ImageFormatListCreateInfo::default()
+							.view_formats(match needs_mutable_format {
+								true => &formats[0..2],
+								false => &formats[0..1],
+							})
+					),
+				None
+			)?
 		};
 
 		// Swapchain images
@@ -346,7 +350,7 @@ impl PresentableSurface {
 				let create_info = vk::ImageViewCreateInfo::default()
 					.image(image)
 					.view_type(vk::ImageViewType::TYPE_2D)
-					.format(vk::Format::B8G8R8A8_SRGB)
+					.format(selected_format_srgb)
 					.components(
 						vk::ComponentMapping {
 							r: vk::ComponentSwizzle::R,

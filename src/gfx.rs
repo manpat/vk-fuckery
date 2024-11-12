@@ -82,8 +82,20 @@ impl Core {
 		let vk_physical_device = select_physical_device(&vk_instance)?;
 		let queue_family_idx = select_graphics_queue_family(&vk_instance, vk_physical_device)?;
 
+		unsafe {
+			let extensions = vk_instance.enumerate_device_extension_properties(vk_physical_device)?;
+			log::info!("Supported device extensions: {extensions:#?}");
+
+			// TODO(pat.m): check for vk::KHR_SWAPCHAIN_MUTABLE_FORMAT_NAME
+		}
+
 		let vk_device = unsafe {
-			let ext_names = [c"VK_KHR_swapchain".as_ptr()];
+			let ext_names = [
+				vk::KHR_SWAPCHAIN_NAME.as_ptr(),
+
+				// TODO(pat.m): can we be sure this is available.
+				vk::KHR_SWAPCHAIN_MUTABLE_FORMAT_NAME.as_ptr(),
+			];
 
 			let queue_create_infos = [
 				vk::DeviceQueueCreateInfo::default()
