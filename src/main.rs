@@ -211,10 +211,6 @@ impl ApplicationHandler for App {
 
 	fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
 		if let Some(presentable_surface) = self.presentable_surface.take() {
-			unsafe {
-				self.gfx_core.vk_device.device_wait_idle().unwrap();
-			}
-
 			presentable_surface.destroy(&self.gfx_core);
 		}
 	}
@@ -410,9 +406,9 @@ impl PresentableSurface {
 	}
 
 	fn destroy(self, core: &gfx::Core) {
-		unsafe {
-			core.vk_device.device_wait_idle().unwrap();
+		core.wait_idle();
 
+		unsafe {
 			for image_view in self.vk_swapchain_image_views {
 				core.vk_device.destroy_image_view(image_view, None);
 			}
