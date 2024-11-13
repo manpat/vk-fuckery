@@ -3,7 +3,7 @@ use winit::{
 	event::{WindowEvent, /*ElementState*/},
 	event_loop::{EventLoop, ActiveEventLoop, ControlFlow},
 	window::{Window, WindowId},
-	dpi::LogicalSize,
+	dpi::{LogicalSize, PhysicalSize},
 };
 
 use anyhow::Context;
@@ -63,7 +63,7 @@ impl ApplicationHandler for App {
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
 		let window_attrs = Window::default_attributes()
 			.with_title("Vk Fuck")
-			.with_inner_size(LogicalSize::new(1024, 768));
+			.with_inner_size(LogicalSize::new(512, 512));
 
 		let window = event_loop.create_window(window_attrs).unwrap();
 		let presentable_surface = PresentableSurface::new(&self.gfx_core, &window).unwrap();
@@ -146,6 +146,12 @@ impl ApplicationHandler for App {
 			WindowEvent::CloseRequested => {
 				event_loop.exit();
 			},
+
+			WindowEvent::Resized(PhysicalSize{ width, height }) => {
+				if let Some(presentable_surface) = self.presentable_surface.as_mut() {
+					presentable_surface.resize(&self.gfx_core, vk::Extent2D{width, height});
+				}
+			}
 
 			WindowEvent::RedrawRequested => {
 				let presentable_surface = self.presentable_surface.as_mut().unwrap();
@@ -329,6 +335,7 @@ impl PresentableSurface {
 					.pre_transform(swapchain_capabilities.current_transform)
 					.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
 					.present_mode(selected_present_mode)
+					.old_swapchain(vk::SwapchainKHR::null())
 					.clipped(true)
 					.push_next(
 						&mut vk::ImageFormatListCreateInfo::default()
@@ -423,6 +430,24 @@ impl PresentableSurface {
 			core.swapchain_fns.destroy_swapchain(self.vk_swapchain, None);
 			core.surface_fns.destroy_surface(self.vk_surface, None);
 		}
+	}
+
+	fn resize(&mut self, _core: &gfx::Core, new_size: vk::Extent2D) {
+		if self.swapchain_extent == new_size {
+			return;
+		}
+
+		// TODO(pat.m): skip render on zero size
+		// self.swapchain_extent = new_size;
+
+		if new_size.width == 0 || new_size.height == 0 {
+			return;
+		}
+
+		println!("resize {new_size:?}");
+
+		// TODO(pat.m): create new swapchain, passing old swapchain + previously used format/present mode
+		// TODO(pat.m): queue swapchain and co for deletion
 	}
 
 	fn start_frame(&mut self, core: &gfx::Core) -> anyhow::Result<Frame> {
