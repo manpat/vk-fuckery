@@ -73,8 +73,8 @@ unsafe extern "system" fn vulkan_debug_utils_callback(
 
 	let c_message = CStr::from_ptr((*p_callback_data).p_message);
 	match c_message.to_str() {
-		Ok(message) => log::log!(log_level, "[vk {types}] {message}\n"),
-		Err(_) => log::log!(log_level, "[vk {types}] {c_message:?}\n"),
+		Ok(message) => log::log!(log_level, "[vk {types}] {message}"),
+		Err(_) => log::log!(log_level, "[vk {types}] {c_message:?}"),
 	}
 
 	vk::FALSE
