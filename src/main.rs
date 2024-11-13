@@ -167,28 +167,26 @@ impl ApplicationHandler for App {
 							})
 					];
 
+					let render_area = vk::Rect2D {
+						offset: vk::Offset2D { x: 0, y: 0 },
+						extent: presentable_surface.swapchain_extent,
+					};
+
 					let render_info = vk::RenderingInfo::default()
 						.layer_count(1)
-						.render_area(vk::Rect2D {
-							offset: vk::Offset2D { x: 0, y: 0 },
-							extent: presentable_surface.swapchain_extent,
-						})
+						.render_area(render_area)
 						.color_attachments(&color_attachments);
 
 					self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
 
 					// Set dynamic state
+					self.gfx_core.vk_device.cmd_set_scissor(frame.vk_cmd_buffer, 0, &[render_area]);
 					self.gfx_core.vk_device.cmd_set_viewport(frame.vk_cmd_buffer, 0, &[vk::Viewport {
 						x: 0.0, y: 0.0,
 						width: presentable_surface.swapchain_extent.width as f32,
 						height: presentable_surface.swapchain_extent.height as f32,
 						min_depth: 0.0,
 						max_depth: 1.0,
-					}]);
-
-					self.gfx_core.vk_device.cmd_set_scissor(frame.vk_cmd_buffer, 0, &[vk::Rect2D {
-						offset: vk::Offset2D { x: 0, y: 0 },
-						extent: presentable_surface.swapchain_extent,
 					}]);
 
 					// Draw
