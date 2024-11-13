@@ -63,7 +63,7 @@ impl ApplicationHandler for App {
 	fn resumed(&mut self, event_loop: &ActiveEventLoop) {
 		let window_attrs = Window::default_attributes()
 			.with_title("Vk Fuck")
-			.with_inner_size(LogicalSize::new(512, 512));
+			.with_inner_size(LogicalSize::new(1024, 512));
 
 		let window = event_loop.create_window(window_attrs).unwrap();
 		let presentable_surface = PresentableSurface::new(&self.gfx_core, &window).unwrap();
@@ -157,7 +157,13 @@ impl ApplicationHandler for App {
 				let presentable_surface = self.presentable_surface.as_mut().unwrap();
 				let window = self.window.as_ref().unwrap();
 
-				let frame = presentable_surface.start_frame(&self.gfx_core).unwrap();
+				let frame = match presentable_surface.start_frame(&self.gfx_core) {
+					Ok(frame) => frame,
+					Err(err) => {
+						log::error!("Unable to start frame: {err}");
+						return;
+					}
+				};
 
 				unsafe {
 					let color_attachments = [
@@ -248,6 +254,9 @@ pub struct PresentableSurface {
 	vk_cmd_buffers: Vec<vk::CommandBuffer>,
 
 	swapchain_extent: vk::Extent2D,
+	swapchain_format: vk::Format,
+	swapchain_present_mode: vk::PresentModeKHR,
+	num_swapchain_images: u32,
 }
 
 impl PresentableSurface {
@@ -255,10 +264,10 @@ impl PresentableSurface {
 		let vk_surface = core.create_surface(&window)?;
 
 		// Swapchain
-		let swapchain_capabilities = core.get_surface_capabilities(vk_surface)?;
+		let surface_capabilities = core.get_surface_capabilities(vk_surface)?;
 
 		const NO_CURRENT_EXTENT: vk::Extent2D = vk::Extent2D{ width: u32::MAX, height: u32::MAX };
-		let swapchain_extent = match swapchain_capabilities.current_extent {
+		let swapchain_extent = match surface_capabilities.current_extent {
 			NO_CURRENT_EXTENT => {
 				let (width, height) = window.inner_size().into();
 				vk::Extent2D{ width, height }
@@ -273,7 +282,7 @@ impl PresentableSurface {
 		log::info!("Supported formats: {supported_formats:#?}");
 		log::info!("Supported present modes: {supported_present_modes:?}");
 
-		dbg!(&swapchain_capabilities, &supported_formats, &supported_present_modes);
+		dbg!(&surface_capabilities, &supported_formats, &supported_present_modes);
 
 		let selected_present_mode = supported_present_modes.into_iter()
 			.max_by_key(|&mode| match mode {
@@ -306,19 +315,20 @@ impl PresentableSurface {
 			x => x,
 		};
 
+		let max_images = match surface_capabilities.max_image_count {
+			0 => u32::MAX,
+			n => n
+		};
+
+		let num_images = (surface_capabilities.min_image_count + 1).min(max_images);
+
 		let needs_mutable_format = selected_format != selected_format_srgb;
+		let swapchain_create_flags = if needs_mutable_format { vk::SwapchainCreateFlagsKHR::MUTABLE_FORMAT } else { vk::SwapchainCreateFlagsKHR::empty() };
 
 		log::info!("Selected present mode: {selected_present_mode:?}");
 		log::info!("Selected swapchain format: {selected_format:?}");
 
 		let vk_swapchain = unsafe {
-			let max_images = match swapchain_capabilities.max_image_count {
-				0 => u32::MAX,
-				n => n
-			};
-
-			let num_images = (swapchain_capabilities.min_image_count + 1).min(max_images);
-			let swapchain_create_flags = if needs_mutable_format { vk::SwapchainCreateFlagsKHR::MUTABLE_FORMAT } else { vk::SwapchainCreateFlagsKHR::empty() };
 			let formats = [selected_format, selected_format_srgb];
 
 			core.swapchain_fns.create_swapchain(
@@ -332,11 +342,12 @@ impl PresentableSurface {
 					.image_array_layers(1)
 					.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
 					.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-					.pre_transform(swapchain_capabilities.current_transform)
+					.pre_transform(surface_capabilities.current_transform)
 					.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
 					.present_mode(selected_present_mode)
 					.old_swapchain(vk::SwapchainKHR::null())
 					.clipped(true)
+					// TODO(pat.m): push if supported
 					.push_next(
 						&mut vk::ImageFormatListCreateInfo::default()
 							.view_formats(match needs_mutable_format {
@@ -412,6 +423,9 @@ impl PresentableSurface {
 			vk_cmd_buffers,
 
 			swapchain_extent,
+			swapchain_format: selected_format,
+			swapchain_present_mode: selected_present_mode,
+			num_swapchain_images: num_images,
 		})
 	}
 
@@ -432,25 +446,106 @@ impl PresentableSurface {
 		}
 	}
 
-	fn resize(&mut self, _core: &gfx::Core, new_size: vk::Extent2D) {
+	fn resize(&mut self, core: &gfx::Core, new_size: vk::Extent2D) {
 		if self.swapchain_extent == new_size {
 			return;
 		}
 
-		// TODO(pat.m): skip render on zero size
-		// self.swapchain_extent = new_size;
+		log::info!("Resize event {new_size:?}");
 
-		if new_size.width == 0 || new_size.height == 0 {
+		let surface_capabilities = core.get_surface_capabilities(self.vk_surface).unwrap();
+		log::info!("Surface capabilities: {surface_capabilities:#?}");
+
+		if new_size.width < surface_capabilities.min_image_extent.width
+			|| new_size.width > surface_capabilities.max_image_extent.width
+			|| new_size.width == 0
+			|| new_size.height < surface_capabilities.min_image_extent.height
+			|| new_size.height > surface_capabilities.max_image_extent.height
+			|| new_size.height == 0
+		{
+			// TODO(pat.m): skip rendering
+			self.swapchain_extent = vk::Extent2D{ width: 0, height: 0 };
 			return;
 		}
 
-		println!("resize {new_size:?}");
+		self.swapchain_extent = new_size;
 
-		// TODO(pat.m): create new swapchain, passing old swapchain + previously used format/present mode
+
+		let swapchain_format_srgb = match self.swapchain_format {
+			vk::Format::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_SRGB,
+			vk::Format::B8G8R8A8_UNORM => vk::Format::B8G8R8A8_SRGB,
+			vk::Format::A8B8G8R8_UNORM_PACK32 => vk::Format::A8B8G8R8_SRGB_PACK32,
+			x => x,
+		};
+
+		let formats = [self.swapchain_format, swapchain_format_srgb];
+		let mut format_list_info = vk::ImageFormatListCreateInfo::default()
+			.view_formats(&formats);
+
+		let mut swapchain_info = vk::SwapchainCreateInfoKHR::default()
+			.surface(self.vk_surface)
+			.min_image_count(self.num_swapchain_images)
+			.image_format(self.swapchain_format)
+			.image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+			.image_extent(new_size)
+			.image_array_layers(1)
+			.image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+			.image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+			.pre_transform(surface_capabilities.current_transform)
+			.composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+			.present_mode(self.swapchain_present_mode)
+			.old_swapchain(self.vk_swapchain)
+			.clipped(true);
+
+		if swapchain_format_srgb != self.swapchain_format {
+			swapchain_info = swapchain_info
+				.flags(vk::SwapchainCreateFlagsKHR::MUTABLE_FORMAT)
+				.push_next(&mut format_list_info);
+		}
+
+		let vk_swapchain = unsafe { core.swapchain_fns.create_swapchain(&swapchain_info, None).expect("Creating swapchain") };
+		let vk_swapchain_images = unsafe { core.swapchain_fns.get_swapchain_images(vk_swapchain).expect("Getting swapchain images") };
+
+		let vk_swapchain_image_views: Vec<_> = vk_swapchain_images.iter()
+			.map(|&image| unsafe {
+				let create_info = vk::ImageViewCreateInfo::default()
+					.image(image)
+					.view_type(vk::ImageViewType::TYPE_2D)
+					.format(swapchain_format_srgb)
+					.components(
+						vk::ComponentMapping {
+							r: vk::ComponentSwizzle::R,
+							g: vk::ComponentSwizzle::G,
+							b: vk::ComponentSwizzle::B,
+							a: vk::ComponentSwizzle::A,
+						}
+					)
+					.subresource_range(
+						vk::ImageSubresourceRange::default()
+							.aspect_mask(vk::ImageAspectFlags::COLOR)
+							.base_mip_level(0)
+							.base_array_layer(0)
+							.level_count(1)
+							.layer_count(1)
+					);
+
+				core.vk_device.create_image_view(&create_info, None).expect("Creating swapchain image views")
+			})
+			.collect();
+
+		self.vk_swapchain = vk_swapchain;
+		self.vk_swapchain_images = vk_swapchain_images;
+		self.vk_swapchain_image_views = vk_swapchain_image_views;
+
 		// TODO(pat.m): queue swapchain and co for deletion
+		// TODO(pat.m): possibly recreate semaphores to avoid syncing with deleted swapchain
 	}
 
 	fn start_frame(&mut self, core: &gfx::Core) -> anyhow::Result<Frame> {
+		if self.swapchain_extent.width == 0 || self.swapchain_extent.height == 0 {
+			anyhow::bail!("No swapchain");
+		}
+
 		let timeout_ns = 1000*1000*1000;
 
 		let sync_index = self.next_sync_index;
@@ -589,7 +684,7 @@ impl PresentableSurface {
 						])
 				],
 				vk::Fence::null()
-			).context("Submit")?;
+			).context("Submitting command buffer")?;
 
 			core.swapchain_fns.queue_present(
 				core.vk_queue,
@@ -597,7 +692,7 @@ impl PresentableSurface {
 					.swapchains(&[self.vk_swapchain])
 					.image_indices(&[frame.image_index as u32])
 					.wait_semaphores(&[frame_sync.raster_finish_semaphore])
-			).context("Present to swapchain")?;
+			).context("Presenting to swapchain")?;
 		}
 
 		Ok(())
