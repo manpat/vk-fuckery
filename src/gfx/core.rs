@@ -175,17 +175,13 @@ impl Core {
 		unsafe {
 			self.vk_device.device_wait_idle().unwrap();
 		}
-	} 
+	}
 }
 
 impl Drop for Core {
 	fn drop(&mut self) {
 		unsafe {
 			self.vk_device.device_wait_idle().unwrap();
-
-			// TODO(pat.m): destroy resources
-			// TODO(pat.m): destroy swapchains
-			// TODO(pat.m): destroy surfaces
 
 			self.vk_device.destroy_semaphore(self.vk_timeline_semaphore, None);
 
@@ -227,5 +223,89 @@ fn select_graphics_queue_family(vk_instance: &ash::Instance, physical_device: vk
 			.find(|(_, family_properties)| family_properties.queue_flags.contains(vk::QueueFlags::GRAPHICS))
 			.map(|(idx, _)| idx as u32)
 			.context("Selected physical device has no graphics queue family")
+	}
+}
+
+
+#[derive(Debug)]
+pub enum DeletableResource {
+	Swapchain(vk::SwapchainKHR),
+	ImageView(vk::ImageView),
+	Image(vk::Image),
+}
+
+impl Core {
+	pub unsafe fn destroy_resource_immediate(&self, resource: impl Into<DeletableResource>) {
+		use DeletableResource::*;
+
+		let resource = resource.into();
+		log::info!("Destroying resource {resource:?}");
+
+		unsafe {
+			match resource {
+				Swapchain(vk_resource) => self.swapchain_fns.destroy_swapchain(vk_resource, None),
+				ImageView(vk_resource) => self.vk_device.destroy_image_view(vk_resource, None),
+				Image(vk_resource) => self.vk_device.destroy_image(vk_resource, None),
+			}
+		}
+	} 
+}
+
+impl From<vk::SwapchainKHR> for DeletableResource {
+	fn from(resource: vk::SwapchainKHR) -> Self {
+		Self::Swapchain(resource)
+	}
+}
+
+impl From<vk::Image> for DeletableResource {
+	fn from(resource: vk::Image) -> Self {
+		Self::Image(resource)
+	}
+}
+
+impl From<vk::ImageView> for DeletableResource {
+	fn from(resource: vk::ImageView) -> Self {
+		Self::ImageView(resource)
+	}
+}
+
+
+pub struct PendingDeletion {
+	timeline_value: u64,
+	resource: DeletableResource,
+}
+
+#[derive(Default)]
+pub struct DeletionQueue {
+	pending_deletions: Vec<PendingDeletion>,
+}
+
+impl DeletionQueue {
+	pub fn queue_deletion(&mut self, core: &Core, resource: impl Into<DeletableResource>) {
+		self.pending_deletions.push(PendingDeletion {
+			resource: resource.into(),
+			timeline_value: core.timeline_value.get(),
+		});
+	}
+
+	pub fn destroy_ready(&mut self, core: &Core) {
+		let current_timeline_value = unsafe {
+			core.vk_device.get_semaphore_counter_value(core.vk_timeline_semaphore).unwrap()
+		};
+
+		self.pending_deletions.sort_by_key(|d| d.timeline_value);
+		let partition_point = self.pending_deletions.partition_point(|d| d.timeline_value <= current_timeline_value);
+
+		for PendingDeletion{resource, ..} in self.pending_deletions.drain(..partition_point) {
+			unsafe {
+				core.destroy_resource_immediate(resource);
+			}
+		}
+	}
+
+	pub unsafe fn destroy_all_immediate(&mut self, core: &Core) {
+		for PendingDeletion{resource, ..} in self.pending_deletions.drain(..) {
+			core.destroy_resource_immediate(resource);
+		}
 	}
 }

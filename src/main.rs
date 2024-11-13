@@ -45,6 +45,8 @@ struct App {
 	window: Option<Window>,
 	presentable_surface: Option<PresentableSurface>,
 
+	deletion_queue: gfx::DeletionQueue,
+
 	vk_pipeline: vk::Pipeline,
 }
 
@@ -54,6 +56,7 @@ impl App {
 			gfx_core,
 			window: None,
 			presentable_surface: None,
+			deletion_queue: gfx::DeletionQueue::default(),
 			vk_pipeline: vk::Pipeline::null(),
 		}
 	}
@@ -149,13 +152,15 @@ impl ApplicationHandler for App {
 
 			WindowEvent::Resized(PhysicalSize{ width, height }) => {
 				if let Some(presentable_surface) = self.presentable_surface.as_mut() {
-					presentable_surface.resize(&self.gfx_core, vk::Extent2D{width, height});
+					presentable_surface.resize(&self.gfx_core, &mut self.deletion_queue, vk::Extent2D{width, height});
 				}
 			}
 
 			WindowEvent::RedrawRequested => {
 				let presentable_surface = self.presentable_surface.as_mut().unwrap();
 				let window = self.window.as_ref().unwrap();
+
+				self.deletion_queue.destroy_ready(&self.gfx_core);
 
 				let frame = match presentable_surface.start_frame(&self.gfx_core) {
 					Ok(frame) => frame,
@@ -227,6 +232,10 @@ impl ApplicationHandler for App {
 
 		if let Some(presentable_surface) = self.presentable_surface.take() {
 			presentable_surface.destroy(&self.gfx_core);
+		}
+
+		unsafe {
+			self.deletion_queue.destroy_all_immediate(&self.gfx_core);
 		}
 	}
 }
@@ -446,7 +455,7 @@ impl PresentableSurface {
 		}
 	}
 
-	fn resize(&mut self, core: &gfx::Core, new_size: vk::Extent2D) {
+	fn resize(&mut self, core: &gfx::Core, deletion_queue: &mut gfx::DeletionQueue, new_size: vk::Extent2D) {
 		if self.swapchain_extent == new_size {
 			return;
 		}
@@ -470,6 +479,10 @@ impl PresentableSurface {
 
 		self.swapchain_extent = new_size;
 
+		deletion_queue.queue_deletion(core, self.vk_swapchain);
+		for image_view in self.vk_swapchain_image_views.iter() {
+			deletion_queue.queue_deletion(core, *image_view);
+		}
 
 		let swapchain_format_srgb = match self.swapchain_format {
 			vk::Format::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_SRGB,
