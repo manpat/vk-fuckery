@@ -152,7 +152,10 @@ impl ApplicationHandler for App {
 
 			WindowEvent::Resized(PhysicalSize{ width, height }) => {
 				if let Some(presentable_surface) = self.presentable_surface.as_mut() {
-					presentable_surface.resize(&self.gfx_core, &mut self.deletion_queue, vk::Extent2D{width, height});
+					let result = presentable_surface.resize(&self.gfx_core, &mut self.deletion_queue, vk::Extent2D{width, height});
+					if let Err(error) = result {
+						log::error!("Failed to resize presentable surface: {error}");
+					};
 				}
 			}
 
@@ -224,15 +227,13 @@ impl ApplicationHandler for App {
 	}
 
 	fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-		self.gfx_core.wait_idle();
-
-		unsafe {
-			self.gfx_core.vk_device.destroy_pipeline(self.vk_pipeline, None);
-		}
+		self.deletion_queue.queue_deletion(self.vk_pipeline, &self.gfx_core);
 
 		if let Some(presentable_surface) = self.presentable_surface.take() {
-			presentable_surface.destroy(&self.gfx_core);
+			presentable_surface.queue_deletion(&mut self.deletion_queue);
 		}
+
+		self.gfx_core.wait_idle();
 
 		unsafe {
 			self.deletion_queue.destroy_all_immediate(&self.gfx_core);

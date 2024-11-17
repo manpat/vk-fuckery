@@ -230,8 +230,14 @@ fn select_graphics_queue_family(vk_instance: &ash::Instance, physical_device: vk
 #[derive(Debug)]
 pub enum DeletableResource {
 	Swapchain(vk::SwapchainKHR),
+	Surface(vk::SurfaceKHR),
+
+	Semaphore(vk::Semaphore),
+
 	ImageView(vk::ImageView),
 	Image(vk::Image),
+
+	Pipeline(vk::Pipeline),
 }
 
 impl Core {
@@ -244,8 +250,14 @@ impl Core {
 		unsafe {
 			match resource {
 				Swapchain(vk_resource) => self.swapchain_fns.destroy_swapchain(vk_resource, None),
+				Surface(vk_resource) => self.surface_fns.destroy_surface(vk_resource, None),
+
+				Semaphore(vk_resource) => self.vk_device.destroy_semaphore(vk_resource, None),
+
 				ImageView(vk_resource) => self.vk_device.destroy_image_view(vk_resource, None),
 				Image(vk_resource) => self.vk_device.destroy_image(vk_resource, None),
+
+				Pipeline(vk_resource) => self.vk_device.destroy_pipeline(vk_resource, None),
 			}
 		}
 	} 
@@ -254,6 +266,18 @@ impl Core {
 impl From<vk::SwapchainKHR> for DeletableResource {
 	fn from(resource: vk::SwapchainKHR) -> Self {
 		Self::Swapchain(resource)
+	}
+}
+
+impl From<vk::SurfaceKHR> for DeletableResource {
+	fn from(resource: vk::SurfaceKHR) -> Self {
+		Self::Surface(resource)
+	}
+}
+
+impl From<vk::Semaphore> for DeletableResource {
+	fn from(resource: vk::Semaphore) -> Self {
+		Self::Semaphore(resource)
 	}
 }
 
@@ -269,6 +293,12 @@ impl From<vk::ImageView> for DeletableResource {
 	}
 }
 
+impl From<vk::Pipeline> for DeletableResource {
+	fn from(resource: vk::Pipeline) -> Self {
+		Self::Pipeline(resource)
+	}
+}
+
 
 pub struct PendingDeletion {
 	timeline_value: u64,
@@ -281,11 +311,15 @@ pub struct DeletionQueue {
 }
 
 impl DeletionQueue {
-	pub fn queue_deletion(&mut self, core: &Core, resource: impl Into<DeletableResource>) {
+	pub fn queue_deletion_after(&mut self, resource: impl Into<DeletableResource>, timeline_value: u64) {
 		self.pending_deletions.push(PendingDeletion {
 			resource: resource.into(),
-			timeline_value: core.timeline_value.get(),
+			timeline_value,
 		});
+	}
+
+	pub fn queue_deletion(&mut self, resource: impl Into<DeletableResource>, core: &Core) {
+		self.queue_deletion_after(resource, core.timeline_value.get());
 	}
 
 	pub fn destroy_ready(&mut self, core: &Core) {
@@ -304,6 +338,9 @@ impl DeletionQueue {
 	}
 
 	pub unsafe fn destroy_all_immediate(&mut self, core: &Core) {
+		// Deletions should be submitted in order to avoid resources being destroyed after resources derived from them.
+		self.pending_deletions.sort_by_key(|d| d.timeline_value);
+
 		for PendingDeletion{resource, ..} in self.pending_deletions.drain(..) {
 			core.destroy_resource_immediate(resource);
 		}
