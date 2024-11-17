@@ -237,6 +237,8 @@ pub enum DeletableResource {
 	ImageView(vk::ImageView),
 	Image(vk::Image),
 
+	Buffer(vk::Buffer),
+
 	Pipeline(vk::Pipeline),
 }
 
@@ -256,6 +258,7 @@ impl Core {
 
 				ImageView(vk_resource) => self.vk_device.destroy_image_view(vk_resource, None),
 				Image(vk_resource) => self.vk_device.destroy_image(vk_resource, None),
+				Buffer(vk_resource) => self.vk_device.destroy_buffer(vk_resource, None),
 
 				Pipeline(vk_resource) => self.vk_device.destroy_pipeline(vk_resource, None),
 			}
@@ -290,6 +293,12 @@ impl From<vk::Image> for DeletableResource {
 impl From<vk::ImageView> for DeletableResource {
 	fn from(resource: vk::ImageView) -> Self {
 		Self::ImageView(resource)
+	}
+}
+
+impl From<vk::Buffer> for DeletableResource {
+	fn from(resource: vk::Buffer) -> Self {
+		Self::Buffer(resource)
 	}
 }
 

@@ -74,69 +74,11 @@ impl ApplicationHandler for App {
 		let vert_sh = create_shader_module(&self.gfx_core.vk_device, "shaders/main.vs.spv").unwrap();
 		let frag_sh = create_shader_module(&self.gfx_core.vk_device, "shaders/main.fs.spv").unwrap();
 
+		let vk_pipeline = create_graphics_pipeline(&self.gfx_core, vert_sh, frag_sh).unwrap();
 
-		let vk_pipeline = unsafe {
-			let shader_stages = [
-				vk::PipelineShaderStageCreateInfo::default()
-					.module(vert_sh)
-					.name(c"main")
-					.stage(vk::ShaderStageFlags::VERTEX),
-
-				vk::PipelineShaderStageCreateInfo::default()
-					.module(frag_sh)
-					.name(c"main")
-					.stage(vk::ShaderStageFlags::FRAGMENT),
-			];
-
-			let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
-
-			let ia_state = vk::PipelineInputAssemblyStateCreateInfo::default()
-				.topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-
-			let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-				.scissor_count(1)
-				.viewport_count(1);
-
-			let raster_state = vk::PipelineRasterizationStateCreateInfo::default()
-				.cull_mode(vk::CullModeFlags::BACK)
-				.front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-				.polygon_mode(vk::PolygonMode::FILL)
-				.line_width(1.0);
-
-			// TODO(pat.m): this should probably also be dynamic
-			let ms_state = vk::PipelineMultisampleStateCreateInfo::default()
-				.rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-			let dynamic_states = [
-				vk::DynamicState::VIEWPORT,
-				vk::DynamicState::SCISSOR,
-			];
-
-			let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
-				.dynamic_states(&dynamic_states);
-
-			let vk_pipeline_layout = self.gfx_core.vk_device.create_pipeline_layout(&Default::default(), None).unwrap();
-
-			let graphic_pipeline_create_infos = [
-				vk::GraphicsPipelineCreateInfo::default()
-					.stages(&shader_stages)
-					.layout(vk_pipeline_layout)
-					.vertex_input_state(&vertex_input_state)
-					.input_assembly_state(&ia_state)
-					.viewport_state(&viewport_state)
-					.rasterization_state(&raster_state)
-					.multisample_state(&ms_state)
-					.dynamic_state(&dynamic_state)
-			];
-
-			let pipelines = self.gfx_core.vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None).unwrap();
-
+		unsafe {
 			self.gfx_core.vk_device.destroy_shader_module(vert_sh, None);
 			self.gfx_core.vk_device.destroy_shader_module(frag_sh, None);
-
-			self.gfx_core.vk_device.destroy_pipeline_layout(vk_pipeline_layout, None);
-
-			pipelines[0]
 		};
 
 		self.window = Some(window);
@@ -173,10 +115,29 @@ impl ApplicationHandler for App {
 					}
 				};
 
+				let vk_cmd_buffer = frame.cmd_buffer();
+				let vk_swapchain_image = frame.swapchain_image_view();
+
+				let render_area = vk::Rect2D {
+					offset: vk::Offset2D { x: 0, y: 0 },
+					extent: frame.extent,
+				};
+
 				unsafe {
+					// Set dynamic state
+					self.gfx_core.vk_device.cmd_set_scissor(vk_cmd_buffer, 0, &[render_area]);
+					self.gfx_core.vk_device.cmd_set_viewport(vk_cmd_buffer, 0, &[vk::Viewport {
+						x: render_area.offset.x as f32,
+						y: render_area.offset.y as f32,
+						width: render_area.extent.width as f32,
+						height: render_area.extent.height as f32,
+						min_depth: 0.0,
+						max_depth: 1.0,
+					}]);
+
 					let color_attachments = [
 						vk::RenderingAttachmentInfo::default()
-							.image_view(frame.vk_swapchain_image_view)
+							.image_view(vk_swapchain_image)
 							.image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
 							.load_op(vk::AttachmentLoadOp::CLEAR)
 							.store_op(vk::AttachmentStoreOp::STORE)
@@ -187,33 +148,18 @@ impl ApplicationHandler for App {
 							})
 					];
 
-					let render_area = vk::Rect2D {
-						offset: vk::Offset2D { x: 0, y: 0 },
-						extent: presentable_surface.swapchain_extent,
-					};
-
 					let render_info = vk::RenderingInfo::default()
 						.layer_count(1)
 						.render_area(render_area)
 						.color_attachments(&color_attachments);
 
-					self.gfx_core.vk_device.cmd_begin_rendering(frame.vk_cmd_buffer, &render_info);
-
-					// Set dynamic state
-					self.gfx_core.vk_device.cmd_set_scissor(frame.vk_cmd_buffer, 0, &[render_area]);
-					self.gfx_core.vk_device.cmd_set_viewport(frame.vk_cmd_buffer, 0, &[vk::Viewport {
-						x: 0.0, y: 0.0,
-						width: presentable_surface.swapchain_extent.width as f32,
-						height: presentable_surface.swapchain_extent.height as f32,
-						min_depth: 0.0,
-						max_depth: 1.0,
-					}]);
+					self.gfx_core.vk_device.cmd_begin_rendering(vk_cmd_buffer, &render_info);
 
 					// Draw
-					self.gfx_core.vk_device.cmd_bind_pipeline(frame.vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
-					self.gfx_core.vk_device.cmd_draw(frame.vk_cmd_buffer, 3, 1, 0, 0);
+					self.gfx_core.vk_device.cmd_bind_pipeline(vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
+					self.gfx_core.vk_device.cmd_draw(vk_cmd_buffer, 3, 1, 0, 0);
 
-					self.gfx_core.vk_device.cmd_end_rendering(frame.vk_cmd_buffer);
+					self.gfx_core.vk_device.cmd_end_rendering(vk_cmd_buffer);
 				}
 
 
@@ -254,5 +200,68 @@ fn create_shader_module(device: &ash::Device, path: impl AsRef<std::path::Path>)
 			.code(contents);
 
 		Ok(device.create_shader_module(&create_info, None)?)
+	}
+}
+
+fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh: vk::ShaderModule) -> anyhow::Result<vk::Pipeline> {
+	let shader_stages = [
+		vk::PipelineShaderStageCreateInfo::default()
+			.module(vert_sh)
+			.name(c"main")
+			.stage(vk::ShaderStageFlags::VERTEX),
+
+		vk::PipelineShaderStageCreateInfo::default()
+			.module(frag_sh)
+			.name(c"main")
+			.stage(vk::ShaderStageFlags::FRAGMENT),
+	];
+
+	let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+
+	let ia_state = vk::PipelineInputAssemblyStateCreateInfo::default()
+		.topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+	let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+		.scissor_count(1)
+		.viewport_count(1);
+
+	let raster_state = vk::PipelineRasterizationStateCreateInfo::default()
+		.cull_mode(vk::CullModeFlags::BACK)
+		.front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+		.polygon_mode(vk::PolygonMode::FILL)
+		.line_width(1.0);
+
+	let ms_state = vk::PipelineMultisampleStateCreateInfo::default()
+		.rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+	let dynamic_states = [
+		vk::DynamicState::VIEWPORT,
+		vk::DynamicState::SCISSOR,
+	];
+
+	let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
+		.dynamic_states(&dynamic_states);
+
+	unsafe {
+		let vk_pipeline_layout = core.vk_device.create_pipeline_layout(&Default::default(), None)?;
+
+		let graphic_pipeline_create_infos = [
+			vk::GraphicsPipelineCreateInfo::default()
+				.stages(&shader_stages)
+				.layout(vk_pipeline_layout)
+				.vertex_input_state(&vertex_input_state)
+				.input_assembly_state(&ia_state)
+				.viewport_state(&viewport_state)
+				.rasterization_state(&raster_state)
+				.multisample_state(&ms_state)
+				.dynamic_state(&dynamic_state)
+		];
+
+		let pipelines = core.vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None)
+			.map_err(|(_, err)| err)?;
+
+		core.vk_device.destroy_pipeline_layout(vk_pipeline_layout, None);
+
+		Ok(pipelines[0])
 	}
 }

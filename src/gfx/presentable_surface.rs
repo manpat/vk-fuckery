@@ -6,12 +6,21 @@ use crate::gfx;
 
 
 pub struct Frame {
-	pub vk_swapchain_image: vk::Image,
-	pub vk_swapchain_image_view: vk::ImageView,
-	pub vk_cmd_buffer: vk::CommandBuffer,
-
+	vk_cmd_buffer: vk::CommandBuffer,
+	swapchain_image: SwapchainImage,
 	sync_index: usize,
-	image_index: usize,
+
+	pub extent: vk::Extent2D,
+}
+
+impl Frame {
+	pub fn cmd_buffer(&self) -> vk::CommandBuffer {
+		self.vk_cmd_buffer
+	}
+
+	pub fn swapchain_image_view(&self) -> vk::ImageView {
+		self.swapchain_image.vk_image_view
+	}
 }
 
 struct FrameSync {
@@ -26,9 +35,6 @@ pub struct PresentableSurface {
 	vk_surface: vk::SurfaceKHR,
 
 	swapchain: Swapchain,
-	// vk_swapchain: vk::SwapchainKHR,
-	// vk_swapchain_images: Vec<vk::Image>,
-	// vk_swapchain_image_views: Vec<vk::ImageView>,
 
 	frame_syncs: Vec<FrameSync>,
 	next_sync_index: usize,
@@ -156,6 +162,7 @@ impl PresentableSurface {
 
 		self.swapchain.queue_deletion(deletion_queue, latest_submit_timeline_value);
 
+		// The surface must be deleted _after_ the swapchain
 		deletion_queue.queue_deletion_after(self.vk_surface, latest_submit_timeline_value+1);
 	}
 
@@ -212,19 +219,7 @@ impl PresentableSurface {
 			)?;
 		}
 
-		let (image_index, _) = unsafe {
-			core.swapchain_fns.acquire_next_image(
-				self.swapchain.vk_swapchain,
-				timeout_ns,
-				frame_sync.image_available_semaphore,
-				vk::Fence::null()
-			).context("Acquiring swapchain image")?
-		};
-
-		let image_index = image_index as usize;
-
-		let vk_swapchain_image = self.swapchain.vk_images[image_index];
-		let vk_swapchain_image_view = self.swapchain.vk_image_views[image_index];
+		let swapchain_image = self.swapchain.acquire_image(core, frame_sync.image_available_semaphore, timeout_ns)?;
 
 		unsafe {
 			core.vk_device.begin_command_buffer(vk_cmd_buffer,
@@ -235,7 +230,7 @@ impl PresentableSurface {
 				&vk::DependencyInfo::default()
 					.image_memory_barriers(&[
 						vk::ImageMemoryBarrier2::default()
-							.image(vk_swapchain_image)
+							.image(swapchain_image.vk_image)
 							.old_layout(vk::ImageLayout::UNDEFINED) // Don't care about previous contents
 							.new_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
 
@@ -259,17 +254,17 @@ impl PresentableSurface {
 		}
 
 		Ok(Frame {
-			vk_swapchain_image,
-			vk_swapchain_image_view,
 			vk_cmd_buffer,
-
+			swapchain_image,
 			sync_index,
-			image_index,
+
+			extent: self.swapchain_extent,
 		})
 	}
 
 	pub fn submit_frame(&mut self, core: &gfx::Core, frame: Frame) -> anyhow::Result<()> {
 		let frame_sync = &mut self.frame_syncs[frame.sync_index];
+		let swapchain_image = frame.swapchain_image;
 
 		unsafe {
 			core.vk_device.cmd_pipeline_barrier2(
@@ -277,7 +272,7 @@ impl PresentableSurface {
 				&vk::DependencyInfo::default()
 					.image_memory_barriers(&[
 						vk::ImageMemoryBarrier2::default()
-							.image(frame.vk_swapchain_image)
+							.image(swapchain_image.vk_image)
 							.old_layout(vk::ImageLayout::ATTACHMENT_OPTIMAL)
 							.new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
 
@@ -334,15 +329,9 @@ impl PresentableSurface {
 				],
 				vk::Fence::null()
 			).context("Submitting command buffer")?;
-
-			core.swapchain_fns.queue_present(
-				core.vk_queue,
-				&vk::PresentInfoKHR::default()
-					.swapchains(&[self.swapchain.vk_swapchain])
-					.image_indices(&[frame.image_index as u32])
-					.wait_semaphores(&[frame_sync.raster_finish_semaphore])
-			).context("Presenting to swapchain")?;
 		}
+
+		self.swapchain.submit_image(core, swapchain_image, frame_sync.raster_finish_semaphore)?;
 
 		Ok(())
 	}
@@ -438,4 +427,42 @@ impl Swapchain {
 			deletion_queue.queue_deletion_after(*image_view, timeline_value);
 		}
 	}
+
+	fn acquire_image(&self, core: &gfx::Core, image_acquire: vk::Semaphore, timeout_ns: u64) -> anyhow::Result<SwapchainImage> {
+		let (image_index, _) = unsafe {
+			core.swapchain_fns.acquire_next_image(
+				self.vk_swapchain,
+				timeout_ns,
+				image_acquire,
+				vk::Fence::null()
+			).context("Acquiring swapchain image")?
+		};
+
+		Ok(SwapchainImage {
+			vk_image: self.vk_images[image_index as usize],
+			vk_image_view: self.vk_image_views[image_index as usize],
+			image_index,
+		})
+	}
+
+	fn submit_image(&self, core: &gfx::Core, image: SwapchainImage, raster_finish: vk::Semaphore) -> anyhow::Result<()> {
+		unsafe {
+			core.swapchain_fns.queue_present(
+				core.vk_queue,
+				&vk::PresentInfoKHR::default()
+					.swapchains(&[self.vk_swapchain])
+					.image_indices(&[image.image_index])
+					.wait_semaphores(&[raster_finish])
+			).context("Presenting to swapchain")?;
+		}
+
+		Ok(())
+	}
+}
+
+
+struct SwapchainImage {
+	vk_image: vk::Image,
+	vk_image_view: vk::ImageView,
+	image_index: u32,
 }
