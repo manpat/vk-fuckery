@@ -3,6 +3,8 @@ use ash::vk;
 
 #[derive(Debug)]
 pub enum DeletableResource {
+	DeviceMemory(vk::DeviceMemory),
+
 	Swapchain(vk::SwapchainKHR),
 	Surface(vk::SurfaceKHR),
 
@@ -10,12 +12,16 @@ pub enum DeletableResource {
 
 	ImageView(vk::ImageView),
 	Image(vk::Image),
-
 	Buffer(vk::Buffer),
-
 	Pipeline(vk::Pipeline),
 }
 
+
+impl From<vk::DeviceMemory> for DeletableResource {
+	fn from(resource: vk::DeviceMemory) -> Self {
+		Self::DeviceMemory(resource)
+	}
+}
 
 impl From<vk::SwapchainKHR> for DeletableResource {
 	fn from(resource: vk::SwapchainKHR) -> Self {
@@ -116,6 +122,8 @@ unsafe fn destroy_resource_immediate(core: &gfx::Core, resource: impl Into<Delet
 
 	unsafe {
 		match resource {
+			DeviceMemory(vk_resource) => core.vk_device.free_memory(vk_resource, None),
+
 			Swapchain(vk_resource) => core.swapchain_fns.destroy_swapchain(vk_resource, None),
 			Surface(vk_resource) => core.surface_fns.destroy_surface(vk_resource, None),
 

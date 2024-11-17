@@ -46,18 +46,32 @@ struct App {
 	presentable_surface: Option<gfx::PresentableSurface>,
 
 	deletion_queue: gfx::DeletionQueue,
+	bleebloo: gfx::Bleebloo,
 
 	vk_pipeline: vk::Pipeline,
 }
 
 impl App {
 	fn new(gfx_core: gfx::Core) -> App {
+		let vert_sh = create_shader_module(&gfx_core.vk_device, "shaders/main.vs.spv").unwrap();
+		let frag_sh = create_shader_module(&gfx_core.vk_device, "shaders/main.fs.spv").unwrap();
+
+		let vk_pipeline = create_graphics_pipeline(&gfx_core, vert_sh, frag_sh).unwrap();
+
+		unsafe {
+			gfx_core.vk_device.destroy_shader_module(vert_sh, None);
+			gfx_core.vk_device.destroy_shader_module(frag_sh, None);
+		};
+
+		let bleebloo = gfx::Bleebloo::new(&gfx_core).unwrap();
+
 		App {
 			gfx_core,
 			window: None,
 			presentable_surface: None,
 			deletion_queue: gfx::DeletionQueue::default(),
-			vk_pipeline: vk::Pipeline::null(),
+			bleebloo,
+			vk_pipeline,
 		}
 	}
 }
@@ -71,19 +85,8 @@ impl ApplicationHandler for App {
 		let window = event_loop.create_window(window_attrs).unwrap();
 		let presentable_surface = gfx::PresentableSurface::new(&self.gfx_core, &window).unwrap();
 
-		let vert_sh = create_shader_module(&self.gfx_core.vk_device, "shaders/main.vs.spv").unwrap();
-		let frag_sh = create_shader_module(&self.gfx_core.vk_device, "shaders/main.fs.spv").unwrap();
-
-		let vk_pipeline = create_graphics_pipeline(&self.gfx_core, vert_sh, frag_sh).unwrap();
-
-		unsafe {
-			self.gfx_core.vk_device.destroy_shader_module(vert_sh, None);
-			self.gfx_core.vk_device.destroy_shader_module(frag_sh, None);
-		};
-
 		self.window = Some(window);
 		self.presentable_surface = Some(presentable_surface);
-		self.vk_pipeline = vk_pipeline;
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -178,6 +181,8 @@ impl ApplicationHandler for App {
 		if let Some(presentable_surface) = self.presentable_surface.take() {
 			presentable_surface.queue_deletion(&mut self.deletion_queue);
 		}
+
+		self.bleebloo.queue_deletion(&mut self.deletion_queue);
 
 		self.gfx_core.wait_idle();
 

@@ -226,3 +226,96 @@ fn select_graphics_queue_family(vk_instance: &ash::Instance, physical_device: vk
 	}
 }
 
+
+
+#[derive(Debug)]
+pub struct Bleebloo {
+	vk_memory: vk::DeviceMemory,
+	vk_buffer: vk::Buffer,
+
+	last_upload_timeline_value: u64,
+}
+
+impl Bleebloo {
+	pub fn new(core: &gfx::Core) -> anyhow::Result<Bleebloo> {
+		let mut memory_budgets = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+		let mut memory_props = vk::PhysicalDeviceMemoryProperties2::default()
+			.push_next(&mut memory_budgets);
+
+		// TODO(pat.m): VkPhysicalDeviceLimits::maxMemoryAllocationCount
+
+		unsafe {
+			core.vk_instance.get_physical_device_memory_properties2(core.vk_physical_device, &mut memory_props);
+		};
+
+		let memory_props = memory_props.memory_properties;
+
+		log::info!("Physical Device Memory: {memory_props:#?}");
+		log::info!("Memory Budgets: {memory_budgets:#?}");
+
+		let (memory_type_index, selected_memory_type) = memory_props.memory_types.iter().enumerate()
+			.take(memory_props.memory_type_count as usize)
+			.find(|(_, memory_type)| memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL))
+			.context("Couldn't find device local memory type")?;
+
+		let memory_heap_index = selected_memory_type.heap_index as usize;
+		let memory_heap = memory_props.memory_heaps[memory_heap_index];
+		let heap_budget = memory_budgets.heap_budget[memory_heap_index];
+
+		log::info!("Selected Device Memory Heap: {memory_heap:?} (#{memory_heap_index}) - budget: {heap_budget}", );
+		log::info!("Selected Device Memory Type: {selected_memory_type:?} (#{memory_type_index})");
+
+		let allocation_size = 100 << 20;
+
+		anyhow::ensure!(heap_budget >= allocation_size, "Selected memory heap not big enough :(");
+
+		let allocate_info = vk::MemoryAllocateInfo::default()
+			.allocation_size(allocation_size)
+			.memory_type_index(memory_type_index as u32);
+
+		let vk_memory = unsafe {
+			core.vk_device.allocate_memory(&allocate_info, None)?
+		};
+
+		log::info!("100MB of device local memory allocated!");
+
+		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
+			| vk::BufferUsageFlags::TRANSFER_DST
+			| vk::BufferUsageFlags::STORAGE_BUFFER
+			| vk::BufferUsageFlags::INDEX_BUFFER
+			| vk::BufferUsageFlags::INDIRECT_BUFFER;
+
+		// TODO(pat.m): vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+
+		let buffer_info = vk::BufferCreateInfo::default()
+			.size(allocation_size)
+			.usage(buffer_usage);
+
+		let vk_buffer = unsafe {
+			core.vk_device.create_buffer(&buffer_info, None)?
+		};
+
+		let buffer_requirements = unsafe { core.vk_device.get_buffer_memory_requirements(vk_buffer) };
+
+		log::info!("Buffer memory requirements: {buffer_requirements:#?}");
+
+		// vulkan guarantees that vk_memory will be adequately aligned for anything we want to put in it.
+		// its only at non-zero offsets that we need to care about alignment.
+		unsafe {
+			core.vk_device.bind_buffer_memory(vk_buffer, vk_memory, 0)?;
+		}
+
+		Ok(Bleebloo{
+			vk_memory,
+			vk_buffer,
+
+			last_upload_timeline_value: 0,
+		})
+	}
+
+	pub fn queue_deletion(&self, deletion_queue: &mut gfx::DeletionQueue) {
+		deletion_queue.queue_deletion_after(self.vk_buffer, self.last_upload_timeline_value);
+		deletion_queue.queue_deletion_after(self.vk_memory, self.last_upload_timeline_value + 1);
+	}
+}
+
