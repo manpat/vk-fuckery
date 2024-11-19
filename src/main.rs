@@ -19,9 +19,14 @@ fn main() -> anyhow::Result<()> {
 		use simplelog::*;
 		use std::fs::File;
 
+		let file_config = ConfigBuilder::new()
+			.add_filter_ignore_str("calloop")
+			.add_filter_ignore_str("sctk")
+			.build();
+
 		CombinedLogger::init(vec![
-			TermLogger::new(LevelFilter::Warn, Config::default(), TerminalMode::Mixed, ColorChoice::Never),
-			WriteLogger::new(LevelFilter::Info, Config::default(), File::create("vk-fuck.log").unwrap()),
+			TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+			WriteLogger::new(LevelFilter::Trace, file_config, File::create("vk-fuck.log").unwrap()),
 		]).unwrap();
 	}
 

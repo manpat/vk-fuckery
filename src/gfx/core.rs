@@ -50,9 +50,6 @@ impl Core {
 
 		let validation_layer_name = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
 
-		log::info!("Required extensions: {required_extensions:?}");
-
-
 		let vk_instance = unsafe {
 			let mut debug_create_info = gfx::new_debug_create_info();
 			let vk_instance_info = vk::InstanceCreateInfo::default()
@@ -69,12 +66,19 @@ impl Core {
 		let vk_physical_device = select_physical_device(&vk_instance)?;
 		let queue_family_idx = select_graphics_queue_family(&vk_instance, vk_physical_device)?;
 
-		unsafe {
-			let extensions = vk_instance.enumerate_device_extension_properties(vk_physical_device)?;
-			log::info!("Supported device extensions: {extensions:#?}");
+		let device_properties = unsafe { vk_instance.get_physical_device_properties(vk_physical_device) };
+		let extensions = unsafe { vk_instance.enumerate_device_extension_properties(vk_physical_device)? };
 
-			// TODO(pat.m): check for vk::KHR_SWAPCHAIN_MUTABLE_FORMAT_NAME
-		}
+		let extensions = extensions.into_iter()
+			.filter_map(|props| {
+				props.extension_name_as_c_str().ok()
+					.map(|s| s.to_string_lossy().into_owned())
+			})
+			.collect::<Vec<_>>();
+
+		log::info!("Physical device properties: {device_properties:#?}");
+		log::info!("Supported device extensions: {extensions:?}");
+		// TODO(pat.m): check for vk::KHR_SWAPCHAIN_MUTABLE_FORMAT_NAME
 
 		let vk_device = unsafe {
 			let ext_names = [

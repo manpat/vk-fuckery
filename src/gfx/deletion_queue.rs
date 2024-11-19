@@ -118,7 +118,7 @@ unsafe fn destroy_resource_immediate(core: &gfx::Core, resource: impl Into<Delet
 	use DeletableResource::*;
 
 	let resource = resource.into();
-	log::info!("Destroying resource {resource:?}");
+	log::debug!("Destroying resource {resource:?}");
 
 	unsafe {
 		match resource {
