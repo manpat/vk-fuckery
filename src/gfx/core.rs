@@ -95,7 +95,8 @@ impl Core {
 			];
 
 			let mut features_12 = vk::PhysicalDeviceVulkan12Features::default()
-				.timeline_semaphore(true);
+				.timeline_semaphore(true)
+				.buffer_device_address(true);
 
 			let mut features_13 = vk::PhysicalDeviceVulkan13Features::default()
 				.dynamic_rendering(true)
@@ -421,6 +422,8 @@ pub struct StagingBuffer {
 	mapped_ptr: *mut u8,
 	allocation_size: usize,
 
+	pub device_address: vk::DeviceAddress,
+
 	last_upload_timeline_value: u64,
 }
 
@@ -430,7 +433,8 @@ impl StagingBuffer {
 		let vk_memory = allocator.allocate_staging_memory(core, allocation_size)?;
 
 		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
-			| vk::BufferUsageFlags::STORAGE_BUFFER;
+			| vk::BufferUsageFlags::STORAGE_BUFFER
+			| vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
 
 		let buffer_info = vk::BufferCreateInfo::default()
 			.size(allocation_size)
@@ -453,6 +457,10 @@ impl StagingBuffer {
 			core.vk_device.map_memory(vk_memory, offset, vk::WHOLE_SIZE, memory_map_flags)?.cast()
 		};
 
+		let device_address = unsafe {
+			core.vk_device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(vk_buffer))
+		};
+
 		// TODO(pat.m): must align mapped_ptr range to VkPhysicalDeviceLimits::nonCoherentAtomSize if memory isn't HOST_COHERENT.
 
 		Ok(StagingBuffer {
@@ -461,6 +469,8 @@ impl StagingBuffer {
 
 			mapped_ptr,
 			allocation_size: allocation_size as usize,
+
+			device_address,
 
 			last_upload_timeline_value: 0,
 		})
@@ -471,6 +481,14 @@ impl StagingBuffer {
 
 		deletion_queue.queue_deletion_after(self.vk_buffer, self.last_upload_timeline_value);
 		deletion_queue.queue_deletion_after(self.vk_memory, self.last_upload_timeline_value + 1);
+	}
+
+	pub fn write<T>(&self, data: &T)
+		where T: bytemuck::NoUninit + Copy
+	{
+		unsafe {
+			self.mapped_ptr.cast::<T>().write(*data);
+		}
 	}
 }
 

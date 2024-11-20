@@ -147,6 +147,8 @@ impl ApplicationHandler for App {
 					extent: frame.extent,
 				};
 
+				self.staging_buffer.write(&self.time);
+
 				unsafe {
 					// Set dynamic state
 					self.gfx_core.vk_device.cmd_set_scissor(vk_cmd_buffer, 0, &[render_area]);
@@ -179,9 +181,24 @@ impl ApplicationHandler for App {
 
 					self.gfx_core.vk_device.cmd_begin_rendering(vk_cmd_buffer, &render_info);
 
+					#[derive(Copy, Clone, bytemuck::NoUninit)]
+					#[repr(C)]
+					struct PushConstants {
+						buffer_addr: vk::DeviceAddress,
+						time: f32,
+						_pad: f32,
+					}
+
+					let push_constants = PushConstants {
+						buffer_addr: self.staging_buffer.device_address,
+						time: self.time,
+
+						_pad: Default::default(),
+					};
+
 					// Draw
 					self.gfx_core.vk_device.cmd_bind_pipeline(vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
-					self.gfx_core.vk_device.cmd_push_constants(vk_cmd_buffer, self.vk_pipeline_layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, &self.time.to_ne_bytes());
+					self.gfx_core.vk_device.cmd_push_constants(vk_cmd_buffer, self.vk_pipeline_layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, bytemuck::bytes_of(&push_constants));
 					self.gfx_core.vk_device.cmd_draw(vk_cmd_buffer, 3, 1, 0, 0);
 
 					self.gfx_core.vk_device.cmd_end_rendering(vk_cmd_buffer);
@@ -276,7 +293,7 @@ fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh
 		vk::PushConstantRange {
 			stage_flags: vk::ShaderStageFlags::ALL_GRAPHICS,
 			offset: 0,
-			size: 4,
+			size: 16,
 		}
 	];
 

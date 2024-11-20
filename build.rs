@@ -59,9 +59,9 @@ fn compile_glsl(compiler_path: &Path, shader_path: &Path) -> anyhow::Result<()> 
 
 	println!("cargo:rerun-if-changed={}", target_path.display());
 
-	Command::new(compiler_path)
+	let exit_status = Command::new(compiler_path)
 		.stdout(Stdio::inherit())
-		.stderr(std::io::stdout())
+		.stderr(std::io::stderr())
 		.arg(&format!("-fshader-stage={shader_stage}"))
 		.arg("--target-env=vulkan1.3")
 		.arg(shader_path)
@@ -69,6 +69,10 @@ fn compile_glsl(compiler_path: &Path, shader_path: &Path) -> anyhow::Result<()> 
 		.arg(target_path)
 		.spawn()?
 		.wait()?;
+
+	if !exit_status.success() {
+		anyhow::bail!("Failed to compile: {}", shader_path.display());
+	}
 
 	Ok(())
 }
