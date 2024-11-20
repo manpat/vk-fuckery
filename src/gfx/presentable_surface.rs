@@ -80,7 +80,7 @@ impl PresentableSurface {
 			.max_by_key(|&mode| match mode {
 				vk::PresentModeKHR::FIFO => 1,
 				vk::PresentModeKHR::FIFO_RELAXED => 2,
-				vk::PresentModeKHR::MAILBOX => 10,
+				// vk::PresentModeKHR::MAILBOX => 10,
 				_ => 0,
 			})
 			.context("Selecting supported present mode")?;

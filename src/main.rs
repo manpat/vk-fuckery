@@ -57,9 +57,12 @@ struct App {
 
 	deletion_queue: gfx::DeletionQueue,
 	allocator: gfx::DeviceAllocator,
-	bleebloo: gfx::Bleebloo,
+	staging_buffer: gfx::StagingBuffer,
 
 	vk_pipeline: vk::Pipeline,
+	vk_pipeline_layout: vk::PipelineLayout,
+
+	time: f32,
 }
 
 impl App {
@@ -67,7 +70,7 @@ impl App {
 		let vert_sh = create_shader_module(&gfx_core.vk_device, "shaders/main.vs.spv").unwrap();
 		let frag_sh = create_shader_module(&gfx_core.vk_device, "shaders/main.fs.spv").unwrap();
 
-		let vk_pipeline = create_graphics_pipeline(&gfx_core, vert_sh, frag_sh).unwrap();
+		let (vk_pipeline, vk_pipeline_layout) = create_graphics_pipeline(&gfx_core, vert_sh, frag_sh).unwrap();
 
 		unsafe {
 			gfx_core.vk_device.destroy_shader_module(vert_sh, None);
@@ -75,7 +78,7 @@ impl App {
 		};
 
 		let allocator = gfx::DeviceAllocator::new(&gfx_core).unwrap();
-		let bleebloo = gfx::Bleebloo::new(&gfx_core, &allocator).unwrap();
+		let staging_buffer = gfx::StagingBuffer::new(&gfx_core, &allocator).unwrap();
 
 		App {
 			gfx_core,
@@ -83,8 +86,11 @@ impl App {
 			presentable_surface: None,
 			deletion_queue: gfx::DeletionQueue::default(),
 			allocator,
-			bleebloo,
+			staging_buffer,
 			vk_pipeline,
+			vk_pipeline_layout,
+
+			time: 0.0,
 		}
 	}
 }
@@ -118,6 +124,8 @@ impl ApplicationHandler for App {
 			}
 
 			WindowEvent::RedrawRequested => {
+				self.time += std::f32::consts::PI / 60.0;
+
 				let presentable_surface = self.presentable_surface.as_mut().unwrap();
 				let window = self.window.as_ref().unwrap();
 
@@ -173,6 +181,7 @@ impl ApplicationHandler for App {
 
 					// Draw
 					self.gfx_core.vk_device.cmd_bind_pipeline(vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
+					self.gfx_core.vk_device.cmd_push_constants(vk_cmd_buffer, self.vk_pipeline_layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, &self.time.to_ne_bytes());
 					self.gfx_core.vk_device.cmd_draw(vk_cmd_buffer, 3, 1, 0, 0);
 
 					self.gfx_core.vk_device.cmd_end_rendering(vk_cmd_buffer);
@@ -195,12 +204,15 @@ impl ApplicationHandler for App {
 			presentable_surface.queue_deletion(&mut self.deletion_queue);
 		}
 
-		self.bleebloo.queue_deletion(&mut self.deletion_queue);
+		self.staging_buffer.queue_deletion(&mut self.deletion_queue);
 
 		self.gfx_core.wait_idle();
 
 		unsafe {
 			self.deletion_queue.destroy_all_immediate(&self.gfx_core);
+
+			// TODO(pat.m): deletion queue! although these can probably be destroyed as soon as we're done with them
+			self.gfx_core.vk_device.destroy_pipeline_layout(self.vk_pipeline_layout, None);
 		}
 	}
 }
@@ -221,7 +233,7 @@ fn create_shader_module(device: &ash::Device, path: impl AsRef<std::path::Path>)
 	}
 }
 
-fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh: vk::ShaderModule) -> anyhow::Result<vk::Pipeline> {
+fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh: vk::ShaderModule) -> anyhow::Result<(vk::Pipeline, vk::PipelineLayout)> {
 	let shader_stages = [
 		vk::PipelineShaderStageCreateInfo::default()
 			.module(vert_sh)
@@ -260,8 +272,19 @@ fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh
 	let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
 		.dynamic_states(&dynamic_states);
 
+	let push_constant_ranges = [
+		vk::PushConstantRange {
+			stage_flags: vk::ShaderStageFlags::ALL_GRAPHICS,
+			offset: 0,
+			size: 4,
+		}
+	];
+
+	let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
+		.push_constant_ranges(&push_constant_ranges);
+
 	unsafe {
-		let vk_pipeline_layout = core.vk_device.create_pipeline_layout(&Default::default(), None)?;
+		let vk_pipeline_layout = core.vk_device.create_pipeline_layout(&pipeline_layout_info, None)?;
 
 		let graphic_pipeline_create_infos = [
 			vk::GraphicsPipelineCreateInfo::default()
@@ -278,9 +301,7 @@ fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh
 		let pipelines = core.vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None)
 			.map_err(|(_, err)| err)?;
 
-		core.vk_device.destroy_pipeline_layout(vk_pipeline_layout, None);
-
-		Ok(pipelines[0])
+		Ok((pipelines[0], vk_pipeline_layout))
 	}
 }
 

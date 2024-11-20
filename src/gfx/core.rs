@@ -321,7 +321,7 @@ impl DeviceAllocator {
 
 		}
 
-		log::info!("Memory types: {:#?}", memory_props.memory_types);
+		log::info!("Memory types: {:#?}", &memory_props.memory_types[0..memory_props.memory_type_count as usize]);
 
 		log::info!("Allowed buffer memory types: 0b{:b}", buffer_requirements.memory_type_bits);
 		log::info!("Buffer alignment requirement: {}", buffer_requirements.alignment);
@@ -333,6 +333,7 @@ impl DeviceAllocator {
 		let (staging_memory_type_index, selected_memory_type) = memory_props.memory_types.iter().enumerate()
 			.take(memory_props.memory_type_count as usize)
 			.filter(|(index, memory_type)| {
+				// TODO(pat.m): don't require HOST_COHERENT and instead manually flush if it is not present
 				let has_desired_flags = memory_type.property_flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT);
 				let allows_buffers = (1 << index) & buffer_requirements.memory_type_bits != 0;
 				allows_buffers && has_desired_flags
@@ -412,29 +413,24 @@ impl DeviceAllocator {
 }
 
 
-
 #[derive(Debug)]
-pub struct Bleebloo {
+pub struct StagingBuffer {
 	vk_memory: vk::DeviceMemory,
 	vk_buffer: vk::Buffer,
+
+	mapped_ptr: *mut u8,
+	allocation_size: usize,
 
 	last_upload_timeline_value: u64,
 }
 
-impl Bleebloo {
-	pub fn new(core: &gfx::Core, allocator: &gfx::DeviceAllocator) -> anyhow::Result<Bleebloo> {
+impl StagingBuffer {
+	pub fn new(core: &gfx::Core, allocator: &gfx::DeviceAllocator) -> anyhow::Result<StagingBuffer> {
 		let allocation_size = 100 << 20;
-		let vk_memory = allocator.allocate_device_memory(core, allocation_size)?;
-
-		log::info!("100MB of device local memory allocated!");
+		let vk_memory = allocator.allocate_staging_memory(core, allocation_size)?;
 
 		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
-			| vk::BufferUsageFlags::TRANSFER_DST
-			| vk::BufferUsageFlags::STORAGE_BUFFER
-			| vk::BufferUsageFlags::INDEX_BUFFER
-			| vk::BufferUsageFlags::INDIRECT_BUFFER;
-
-		// TODO(pat.m): vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+			| vk::BufferUsageFlags::STORAGE_BUFFER;
 
 		let buffer_info = vk::BufferCreateInfo::default()
 			.size(allocation_size)
@@ -443,8 +439,7 @@ impl Bleebloo {
 		let vk_buffer = unsafe {core.vk_device.create_buffer(&buffer_info, None)? };
 		let buffer_requirements = unsafe { core.vk_device.get_buffer_memory_requirements(vk_buffer) };
 
-		log::info!("Buffer memory requirements: {buffer_requirements:#?}");
-		log::info!("Allowed memory type bits: {:b}", buffer_requirements.memory_type_bits);
+		log::info!("Staging buffer memory requirements: size {}MiB - align {}", buffer_requirements.size >> 20, buffer_requirements.alignment);
 
 		// vulkan guarantees that vk_memory will be adequately aligned for anything we want to put in it.
 		// its only at non-zero offsets that we need to care about alignment.
@@ -452,17 +447,85 @@ impl Bleebloo {
 			core.vk_device.bind_buffer_memory(vk_buffer, vk_memory, 0)?;
 		}
 
-		Ok(Bleebloo {
+		let mapped_ptr = unsafe {
+			let offset = 0;
+			let memory_map_flags = vk::MemoryMapFlags::empty();
+			core.vk_device.map_memory(vk_memory, offset, vk::WHOLE_SIZE, memory_map_flags)?.cast()
+		};
+
+		// TODO(pat.m): must align mapped_ptr range to VkPhysicalDeviceLimits::nonCoherentAtomSize if memory isn't HOST_COHERENT.
+
+		Ok(StagingBuffer {
 			vk_memory,
 			vk_buffer,
+
+			mapped_ptr,
+			allocation_size: allocation_size as usize,
 
 			last_upload_timeline_value: 0,
 		})
 	}
 
 	pub fn queue_deletion(&self, deletion_queue: &mut gfx::DeletionQueue) {
+		// No unmap required! vkFreeMemory will implicitly unmap memory.
+
 		deletion_queue.queue_deletion_after(self.vk_buffer, self.last_upload_timeline_value);
 		deletion_queue.queue_deletion_after(self.vk_memory, self.last_upload_timeline_value + 1);
 	}
 }
+
+
+
+
+// #[derive(Debug)]
+// pub struct Bleebloo {
+// 	vk_memory: vk::DeviceMemory,
+// 	vk_buffer: vk::Buffer,
+
+// 	last_upload_timeline_value: u64,
+// }
+
+// impl Bleebloo {
+// 	pub fn new(core: &gfx::Core, allocator: &gfx::DeviceAllocator) -> anyhow::Result<Bleebloo> {
+// 		let allocation_size = 100 << 20;
+// 		let vk_memory = allocator.allocate_device_memory(core, allocation_size)?;
+
+// 		log::info!("100MB of device local memory allocated!");
+
+// 		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
+// 			| vk::BufferUsageFlags::TRANSFER_DST
+// 			| vk::BufferUsageFlags::STORAGE_BUFFER
+// 			| vk::BufferUsageFlags::INDEX_BUFFER
+// 			| vk::BufferUsageFlags::INDIRECT_BUFFER;
+
+// 		// TODO(pat.m): vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+
+// 		let buffer_info = vk::BufferCreateInfo::default()
+// 			.size(allocation_size)
+// 			.usage(buffer_usage);
+
+// 		let vk_buffer = unsafe {core.vk_device.create_buffer(&buffer_info, None)? };
+// 		let buffer_requirements = unsafe { core.vk_device.get_buffer_memory_requirements(vk_buffer) };
+
+// 		log::info!("Buffer memory requirements: size {}B - align {}", buffer_requirements.size, buffer_requirements.alignment);
+
+// 		// vulkan guarantees that vk_memory will be adequately aligned for anything we want to put in it.
+// 		// its only at non-zero offsets that we need to care about alignment.
+// 		unsafe {
+// 			core.vk_device.bind_buffer_memory(vk_buffer, vk_memory, 0)?;
+// 		}
+
+// 		Ok(Bleebloo {
+// 			vk_memory,
+// 			vk_buffer,
+
+// 			last_upload_timeline_value: 0,
+// 		})
+// 	}
+
+// 	pub fn queue_deletion(&self, deletion_queue: &mut gfx::DeletionQueue) {
+// 		deletion_queue.queue_deletion_after(self.vk_buffer, self.last_upload_timeline_value);
+// 		deletion_queue.queue_deletion_after(self.vk_memory, self.last_upload_timeline_value + 1);
+// 	}
+// }
 
