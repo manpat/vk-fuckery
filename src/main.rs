@@ -24,8 +24,13 @@ fn main() -> anyhow::Result<()> {
 			.add_filter_ignore_str("sctk")
 			.build();
 
+		let color_choice = match cfg!(windows) {
+			false => ColorChoice::Auto,
+			true => ColorChoice::Never,
+		};
+
 		CombinedLogger::init(vec![
-			TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, ColorChoice::Auto),
+			TermLogger::new(LevelFilter::Info, Config::default(), TerminalMode::Mixed, color_choice),
 			WriteLogger::new(LevelFilter::Trace, file_config, File::create("vk-fuck.log").unwrap()),
 		]).unwrap();
 	}
