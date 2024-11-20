@@ -230,6 +230,97 @@ fn select_graphics_queue_family(vk_instance: &ash::Instance, physical_device: vk
 	}
 }
 
+pub struct DeviceAllocator {
+	staging_memory_type_index: u32,
+	staging_memory_heap_budget: u64,
+
+	device_local_memory_type_index: u32,
+	device_local_memory_heap_budget: u64,
+}
+
+impl DeviceAllocator {
+	pub fn new(core: &gfx::Core) -> anyhow::Result<DeviceAllocator> {
+		// TODO(pat.m): store
+		let mut memory_budgets = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+		let mut memory_props = vk::PhysicalDeviceMemoryProperties2::default()
+			.push_next(&mut memory_budgets);
+
+		// TODO(pat.m): max allocation count
+
+		unsafe {
+			core.vk_instance.get_physical_device_memory_properties2(core.vk_physical_device, &mut memory_props);
+		};
+
+		let memory_props = memory_props.memory_properties;
+
+		log::info!("Physical Device Memory: {memory_props:#?}");
+		log::info!("Memory Budgets: {memory_budgets:#?}");
+
+		// Select the host local memory type with the largest associated heap for staging memory
+		let (staging_memory_type_index, selected_memory_type) = memory_props.memory_types.iter().enumerate()
+			.take(memory_props.memory_type_count as usize)
+			.filter(|(_, memory_type)| memory_type.property_flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT))
+			.max_by_key(|(_, memory_type)| memory_budgets.heap_budget[memory_type.heap_index as usize])
+			.context("Couldn't find staging memory type")?;
+
+		// TODO(pat.m): weight options to prefer uncached memory!
+
+		let memory_heap_index = selected_memory_type.heap_index as usize;
+		let memory_heap = memory_props.memory_heaps[memory_heap_index];
+		let staging_memory_heap_budget = memory_budgets.heap_budget[memory_heap_index];
+
+		log::info!("Selected Staging Memory Heap: {memory_heap:?} (#{memory_heap_index}) - budget: {staging_memory_heap_budget}", );
+		log::info!("Selected Staging Memory Type: {selected_memory_type:?} (#{staging_memory_type_index})");
+
+		// Select the device local memory type with the largest associated heap
+		let (device_local_memory_type_index, _selected_memory_type) = memory_props.memory_types.iter().enumerate()
+			.take(memory_props.memory_type_count as usize)
+			.filter(|(_, memory_type)| memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL))
+			.max_by_key(|(_, memory_type)| memory_budgets.heap_budget[memory_type.heap_index as usize])
+			.context("Couldn't find device local memory type")?;
+
+		// TODO(pat.m): weight options to prefer non-host visible!
+
+		let memory_heap_index = selected_memory_type.heap_index as usize;
+		let memory_heap = memory_props.memory_heaps[memory_heap_index];
+		let device_local_memory_heap_budget = memory_budgets.heap_budget[memory_heap_index];
+
+		log::info!("Selected Device Local Memory Heap: {memory_heap:?} (#{memory_heap_index}) - budget: {device_local_memory_heap_budget}", );
+		log::info!("Selected Device Local Memory Type: {selected_memory_type:?} (#{device_local_memory_type_index})");
+
+		Ok(DeviceAllocator {
+			staging_memory_type_index: staging_memory_type_index as u32,
+			device_local_memory_type_index: device_local_memory_type_index as u32,
+
+			// TODO(pat.m): maybe storing these doesn't make sense?
+			staging_memory_heap_budget,
+			device_local_memory_heap_budget,
+		})
+	}
+
+	fn allocate(core: &gfx::Core, size_bytes: u64, memory_type_index: u32) -> anyhow::Result<vk::DeviceMemory> {
+		let allocate_info = vk::MemoryAllocateInfo::default()
+			.allocation_size(size_bytes)
+			.memory_type_index(memory_type_index);
+
+		let vk_memory = unsafe {
+			core.vk_device.allocate_memory(&allocate_info, None)?
+		};
+
+		Ok(vk_memory)
+	}
+
+	pub fn allocate_staging_memory(&self, core: &gfx::Core, size_bytes: u64) -> anyhow::Result<vk::DeviceMemory> {
+		anyhow::ensure!(size_bytes <= self.staging_memory_heap_budget, "Staging memory heap not big enough :(");
+		Self::allocate(core, size_bytes, self.staging_memory_type_index)
+	}
+
+	pub fn allocate_device_memory(&self, core: &gfx::Core, size_bytes: u64) -> anyhow::Result<vk::DeviceMemory> {
+		anyhow::ensure!(size_bytes <= self.device_local_memory_heap_budget, "Device local memory heap not big enough :(");
+		Self::allocate(core, size_bytes, self.device_local_memory_type_index)
+	}
+}
+
 
 
 #[derive(Debug)]
@@ -241,45 +332,9 @@ pub struct Bleebloo {
 }
 
 impl Bleebloo {
-	pub fn new(core: &gfx::Core) -> anyhow::Result<Bleebloo> {
-		let mut memory_budgets = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
-		let mut memory_props = vk::PhysicalDeviceMemoryProperties2::default()
-			.push_next(&mut memory_budgets);
-
-		// TODO(pat.m): VkPhysicalDeviceLimits::maxMemoryAllocationCount
-
-		unsafe {
-			core.vk_instance.get_physical_device_memory_properties2(core.vk_physical_device, &mut memory_props);
-		};
-
-		let memory_props = memory_props.memory_properties;
-
-		log::info!("Physical Device Memory: {memory_props:#?}");
-		log::info!("Memory Budgets: {memory_budgets:#?}");
-
-		let (memory_type_index, selected_memory_type) = memory_props.memory_types.iter().enumerate()
-			.take(memory_props.memory_type_count as usize)
-			.find(|(_, memory_type)| memory_type.property_flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL))
-			.context("Couldn't find device local memory type")?;
-
-		let memory_heap_index = selected_memory_type.heap_index as usize;
-		let memory_heap = memory_props.memory_heaps[memory_heap_index];
-		let heap_budget = memory_budgets.heap_budget[memory_heap_index];
-
-		log::info!("Selected Device Memory Heap: {memory_heap:?} (#{memory_heap_index}) - budget: {heap_budget}", );
-		log::info!("Selected Device Memory Type: {selected_memory_type:?} (#{memory_type_index})");
-
+	pub fn new(core: &gfx::Core, allocator: &gfx::DeviceAllocator) -> anyhow::Result<Bleebloo> {
 		let allocation_size = 100 << 20;
-
-		anyhow::ensure!(heap_budget >= allocation_size, "Selected memory heap not big enough :(");
-
-		let allocate_info = vk::MemoryAllocateInfo::default()
-			.allocation_size(allocation_size)
-			.memory_type_index(memory_type_index as u32);
-
-		let vk_memory = unsafe {
-			core.vk_device.allocate_memory(&allocate_info, None)?
-		};
+		let vk_memory = allocator.allocate_device_memory(core, allocation_size)?;
 
 		log::info!("100MB of device local memory allocated!");
 
@@ -309,7 +364,7 @@ impl Bleebloo {
 			core.vk_device.bind_buffer_memory(vk_buffer, vk_memory, 0)?;
 		}
 
-		Ok(Bleebloo{
+		Ok(Bleebloo {
 			vk_memory,
 			vk_buffer,
 

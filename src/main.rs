@@ -51,6 +51,7 @@ struct App {
 	presentable_surface: Option<gfx::PresentableSurface>,
 
 	deletion_queue: gfx::DeletionQueue,
+	allocator: gfx::DeviceAllocator,
 	bleebloo: gfx::Bleebloo,
 
 	vk_pipeline: vk::Pipeline,
@@ -68,13 +69,15 @@ impl App {
 			gfx_core.vk_device.destroy_shader_module(frag_sh, None);
 		};
 
-		let bleebloo = gfx::Bleebloo::new(&gfx_core).unwrap();
+		let allocator = gfx::DeviceAllocator::new(&gfx_core).unwrap();
+		let bleebloo = gfx::Bleebloo::new(&gfx_core, &allocator).unwrap();
 
 		App {
 			gfx_core,
 			window: None,
 			presentable_surface: None,
 			deletion_queue: gfx::DeletionQueue::default(),
+			allocator,
 			bleebloo,
 			vk_pipeline,
 		}
