@@ -391,9 +391,13 @@ impl DeviceAllocator {
 	}
 
 	fn allocate(core: &gfx::Core, size_bytes: u64, memory_type_index: u32) -> anyhow::Result<vk::DeviceMemory> {
+		let mut allocate_flags = vk::MemoryAllocateFlagsInfo::default()
+			.flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+
 		let allocate_info = vk::MemoryAllocateInfo::default()
 			.allocation_size(size_bytes)
-			.memory_type_index(memory_type_index);
+			.memory_type_index(memory_type_index)
+			.push_next(&mut allocate_flags);
 
 		let vk_memory = unsafe {
 			core.vk_device.allocate_memory(&allocate_info, None)?

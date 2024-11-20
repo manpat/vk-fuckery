@@ -148,6 +148,7 @@ impl ApplicationHandler for App {
 				};
 
 				self.staging_buffer.write(&self.time);
+				// TODO(pat.m): likely need a pipeline barrier
 
 				unsafe {
 					// Set dynamic state
