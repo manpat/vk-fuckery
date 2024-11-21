@@ -464,7 +464,7 @@ impl StagingBuffer {
 			.size(allocation_size)
 			.usage(buffer_usage);
 
-		let vk_buffer = unsafe {core.vk_device.create_buffer(&buffer_info, None)? };
+		let vk_buffer = unsafe { core.vk_device.create_buffer(&buffer_info, None)? };
 		let buffer_requirements = unsafe { core.vk_device.get_buffer_memory_requirements(vk_buffer) };
 
 		log::info!("Staging buffer memory requirements: size {}MiB - align {}", buffer_requirements.size >> 20, buffer_requirements.alignment);
