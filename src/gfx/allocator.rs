@@ -28,7 +28,6 @@ impl DeviceAllocator {
 		// Just everything we could possibly want from a buffer
 		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
 			| vk::BufferUsageFlags::TRANSFER_DST
-			| vk::BufferUsageFlags::STORAGE_BUFFER
 			| vk::BufferUsageFlags::INDEX_BUFFER
 			| vk::BufferUsageFlags::INDIRECT_BUFFER
 			| vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;

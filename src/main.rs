@@ -148,7 +148,8 @@ impl ApplicationHandler for App {
 				};
 
 				self.staging_buffer.write(&self.time);
-				// TODO(pat.m): likely need a pipeline barrier
+
+				// Note: no barriers needed for host writes since vkQueueSubmit acts as an implicit memory barrier.
 
 				unsafe {
 					// Set dynamic state
@@ -199,7 +200,6 @@ impl ApplicationHandler for App {
 
 					self.gfx_core.vk_device.cmd_end_rendering(vk_cmd_buffer);
 				}
-
 
 				window.pre_present_notify();
 				presentable_surface.submit_frame(&self.gfx_core, frame).unwrap();
