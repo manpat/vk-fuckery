@@ -186,15 +186,10 @@ impl ApplicationHandler for App {
 					#[repr(C)]
 					struct PushConstants {
 						buffer_addr: vk::DeviceAddress,
-						time: f32,
-						_pad: f32,
 					}
 
 					let push_constants = PushConstants {
 						buffer_addr: self.staging_buffer.device_address,
-						time: self.time,
-
-						_pad: Default::default(),
 					};
 
 					// Draw

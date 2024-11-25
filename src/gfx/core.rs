@@ -96,7 +96,8 @@ impl Core {
 
 			let mut features_12 = vk::PhysicalDeviceVulkan12Features::default()
 				.timeline_semaphore(true)
-				.buffer_device_address(true);
+				.buffer_device_address(true)
+				.scalar_block_layout(true);
 
 			let mut features_13 = vk::PhysicalDeviceVulkan13Features::default()
 				.dynamic_rendering(true)
@@ -457,7 +458,6 @@ impl StagingBuffer {
 		let vk_memory = allocator.allocate_staging_memory(core, allocation_size)?;
 
 		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
-			| vk::BufferUsageFlags::STORAGE_BUFFER
 			| vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
 
 		let buffer_info = vk::BufferCreateInfo::default()
@@ -515,59 +515,3 @@ impl StagingBuffer {
 		}
 	}
 }
-
-
-
-
-// #[derive(Debug)]
-// pub struct Bleebloo {
-// 	vk_memory: vk::DeviceMemory,
-// 	vk_buffer: vk::Buffer,
-
-// 	last_upload_timeline_value: u64,
-// }
-
-// impl Bleebloo {
-// 	pub fn new(core: &gfx::Core, allocator: &gfx::DeviceAllocator) -> anyhow::Result<Bleebloo> {
-// 		let allocation_size = 100 << 20;
-// 		let vk_memory = allocator.allocate_device_memory(core, allocation_size)?;
-
-// 		log::info!("100MB of device local memory allocated!");
-
-// 		let buffer_usage = vk::BufferUsageFlags::TRANSFER_SRC
-// 			| vk::BufferUsageFlags::TRANSFER_DST
-// 			| vk::BufferUsageFlags::STORAGE_BUFFER
-// 			| vk::BufferUsageFlags::INDEX_BUFFER
-// 			| vk::BufferUsageFlags::INDIRECT_BUFFER;
-
-// 		// TODO(pat.m): vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-
-// 		let buffer_info = vk::BufferCreateInfo::default()
-// 			.size(allocation_size)
-// 			.usage(buffer_usage);
-
-// 		let vk_buffer = unsafe {core.vk_device.create_buffer(&buffer_info, None)? };
-// 		let buffer_requirements = unsafe { core.vk_device.get_buffer_memory_requirements(vk_buffer) };
-
-// 		log::info!("Buffer memory requirements: size {}B - align {}", buffer_requirements.size, buffer_requirements.alignment);
-
-// 		// vulkan guarantees that vk_memory will be adequately aligned for anything we want to put in it.
-// 		// its only at non-zero offsets that we need to care about alignment.
-// 		unsafe {
-// 			core.vk_device.bind_buffer_memory(vk_buffer, vk_memory, 0)?;
-// 		}
-
-// 		Ok(Bleebloo {
-// 			vk_memory,
-// 			vk_buffer,
-
-// 			last_upload_timeline_value: 0,
-// 		})
-// 	}
-
-// 	pub fn queue_deletion(&self, deletion_queue: &mut gfx::DeletionQueue) {
-// 		deletion_queue.queue_deletion_after(self.vk_buffer, self.last_upload_timeline_value);
-// 		deletion_queue.queue_deletion_after(self.vk_memory, self.last_upload_timeline_value + 1);
-// 	}
-// }
-
