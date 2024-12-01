@@ -35,7 +35,19 @@ fn main() -> anyhow::Result<()> {
 		]).unwrap();
 	}
 
-	let event_loop = EventLoop::new()?;
+	let mut event_loop = EventLoop::builder();
+
+	#[cfg(target_os="linux")]
+	if false /* rendedoc attached */ {
+		// Renderdoc doesn't support wayland :(
+		// TODO(pat.m): better would be to actually check what instance extensions are available and
+		// select a backend based on that
+		use winit::platform::x11::EventLoopBuilderExtX11;
+		event_loop.with_x11();
+	}
+
+	let event_loop = event_loop.build()?;
+
 	event_loop.set_control_flow(ControlFlow::Poll);
 
 	let gfx_core = gfx::Core::new(event_loop.owned_display_handle())?;
@@ -61,6 +73,10 @@ struct App {
 
 	vk_pipeline: vk::Pipeline,
 	vk_pipeline_layout: vk::PipelineLayout,
+
+	vk_depth_allocation: vk::DeviceMemory,
+	vk_depth_image: vk::Image,
+	vk_depth_view: vk::ImageView,
 
 	time: f32,
 }
@@ -90,8 +106,74 @@ impl App {
 			vk_pipeline,
 			vk_pipeline_layout,
 
+			vk_depth_allocation: vk::DeviceMemory::null(),
+			vk_depth_image: vk::Image::null(),
+			vk_depth_view: vk::ImageView::null(),
+
 			time: 0.0,
 		}
+	}
+
+	fn destroy_depth_attachment(&mut self) {
+		if self.vk_depth_view != vk::ImageView::null() {
+			self.deletion_queue.queue_deletion(self.vk_depth_view, &self.gfx_core);
+			self.deletion_queue.queue_deletion(self.vk_depth_image, &self.gfx_core);
+			self.deletion_queue.queue_deletion(self.vk_depth_allocation, &self.gfx_core);
+		}
+
+		self.vk_depth_view = vk::ImageView::null();
+		self.vk_depth_image = vk::Image::null();
+		self.vk_depth_allocation = vk::DeviceMemory::null();
+	}
+
+	fn recreate_depth_attachment(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+		self.destroy_depth_attachment();
+
+		let image_create_info = vk::ImageCreateInfo::default()
+			.image_type(vk::ImageType::TYPE_2D)
+			.format(vk::Format::D32_SFLOAT)
+			.samples(vk::SampleCountFlags::TYPE_1)
+			.extent(vk::Extent3D{ width, height, depth: 1 })
+			.mip_levels(1)
+			.array_layers(1)
+			.tiling(vk::ImageTiling::OPTIMAL)
+			.usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+			.initial_layout(vk::ImageLayout::UNDEFINED)
+			.sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+		unsafe {
+			self.vk_depth_image = self.gfx_core.vk_device.create_image(&image_create_info, None)?;
+			let requirements = self.gfx_core.vk_device.get_image_memory_requirements(self.vk_depth_image);
+
+			self.vk_depth_allocation = self.allocator.allocate_device_memory(&self.gfx_core, requirements.size)?;
+			self.gfx_core.vk_device.bind_image_memory(self.vk_depth_image, self.vk_depth_allocation, 0)?;
+
+			let view_create_info = vk::ImageViewCreateInfo::default()
+				.image(self.vk_depth_image)
+				.view_type(vk::ImageViewType::TYPE_2D)
+				.format(vk::Format::D32_SFLOAT)
+				.components(
+					// TODO(pat.m): should just be a const.
+					vk::ComponentMapping {
+						r: vk::ComponentSwizzle::R,
+						g: vk::ComponentSwizzle::G,
+						b: vk::ComponentSwizzle::B,
+						a: vk::ComponentSwizzle::A,
+					}
+				)
+				.subresource_range(
+					vk::ImageSubresourceRange::default()
+						.aspect_mask(vk::ImageAspectFlags::DEPTH)
+						.base_mip_level(0)
+						.base_array_layer(0)
+						.level_count(1)
+						.layer_count(1)
+				);
+
+			self.vk_depth_view = self.gfx_core.vk_device.create_image_view(&view_create_info, None)?;
+		}
+
+		Ok(())
 	}
 }
 
@@ -120,6 +202,8 @@ impl ApplicationHandler for App {
 					if let Err(error) = result {
 						log::error!("Failed to resize presentable surface: {error}");
 					};
+
+					self.recreate_depth_attachment(width, height).unwrap();
 				}
 			}
 
@@ -135,6 +219,18 @@ impl ApplicationHandler for App {
 					Ok(frame) => frame,
 					Err(err) => {
 						log::error!("Unable to start frame: {err}");
+
+						let extent = presentable_surface.swapchain_extent;
+
+						// TODO(pat.m): YUCK
+						let _ = presentable_surface.resize(&self.gfx_core, &mut self.deletion_queue, vk::Extent2D{width: 0, height: 0});
+						let result = presentable_surface.resize(&self.gfx_core, &mut self.deletion_queue, extent);
+						if let Err(error) = result {
+							log::error!("Failed to resize presentable surface: {error}");
+							return;
+						};
+
+						window.request_redraw();
 						return;
 					}
 				};
@@ -147,7 +243,31 @@ impl ApplicationHandler for App {
 					extent: frame.extent,
 				};
 
-				self.staging_buffer.write(&self.time);
+				#[derive(Copy, Clone, bytemuck::NoUninit)]
+				#[repr(C)]
+				struct GlobalBuffer {
+					projection_view: [[f32; 4]; 4],
+					time: f32,
+				}
+
+				let global_buffer_addr = self.staging_buffer.write(&GlobalBuffer {
+					projection_view: {
+						let aspect = frame.extent.width as f32 / frame.extent.height as f32;
+						let xsc = 1.0 / aspect;
+						let ysc = 1.0;
+						let zsc = -1.0 / 10.0;
+						let ztr = 1.0;
+
+						[
+							[xsc, 0.0, 0.0, 0.0],
+							[0.0, ysc, 0.0, 0.0],
+							[0.0, 0.0, zsc, 1.0],
+							[0.0, 0.0, ztr, 1.0],
+						]
+					},
+
+					time: self.time,
+				});
 
 				// Note: no barriers needed for host writes since vkQueueSubmit acts as an implicit memory barrier.
 
@@ -176,33 +296,51 @@ impl ApplicationHandler for App {
 							})
 					];
 
+					let depth_attachment = vk::RenderingAttachmentInfo::default()
+						.image_view(self.vk_depth_view)
+						.image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+						.load_op(vk::AttachmentLoadOp::CLEAR)
+						.store_op(vk::AttachmentStoreOp::DONT_CARE)
+						.clear_value(vk::ClearValue {
+							depth_stencil: vk::ClearDepthStencilValue {
+								depth: 0.0,
+								stencil: 0,
+							},
+						});
+
 					let render_info = vk::RenderingInfo::default()
 						.layer_count(1)
 						.render_area(render_area)
-						.color_attachments(&color_attachments);
+						.color_attachments(&color_attachments)
+						.depth_attachment(&depth_attachment);
 
 					self.gfx_core.vk_device.cmd_begin_rendering(vk_cmd_buffer, &render_info);
 
-					#[derive(Copy, Clone, bytemuck::NoUninit)]
-					#[repr(C)]
-					struct PushConstants {
-						buffer_addr: vk::DeviceAddress,
-					}
-
-					let push_constants = PushConstants {
-						buffer_addr: self.staging_buffer.device_address,
-					};
-
 					// Draw
 					self.gfx_core.vk_device.cmd_bind_pipeline(vk_cmd_buffer, vk::PipelineBindPoint::GRAPHICS, self.vk_pipeline);
-					self.gfx_core.vk_device.cmd_push_constants(vk_cmd_buffer, self.vk_pipeline_layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, bytemuck::bytes_of(&push_constants));
-					self.gfx_core.vk_device.cmd_draw(vk_cmd_buffer, 3, 1, 0, 0);
+					self.gfx_core.vk_device.cmd_push_constants(vk_cmd_buffer, self.vk_pipeline_layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, bytemuck::bytes_of(&global_buffer_addr));
+
+					let offsets = [
+						[0.0f32, 0.0, 0.0, 0.0],
+						[1.0, 0.0, 1.0, 3.0],
+						[-1.0, 0.0, 3.0, 6.0],
+						[-0.5, 1.0, 2.0, 9.0],
+					];
+
+					for offset in offsets {
+						let per_draw_addr = self.staging_buffer.write(&offset);
+						self.gfx_core.vk_device.cmd_push_constants(vk_cmd_buffer, self.vk_pipeline_layout, vk::ShaderStageFlags::ALL_GRAPHICS, 8, bytemuck::bytes_of(&per_draw_addr));
+						self.gfx_core.vk_device.cmd_draw(vk_cmd_buffer, 3, 1, 0, 0);
+					}
 
 					self.gfx_core.vk_device.cmd_end_rendering(vk_cmd_buffer);
 				}
 
 				window.pre_present_notify();
-				presentable_surface.submit_frame(&self.gfx_core, frame).unwrap();
+
+				if let Err(error) = presentable_surface.submit_frame(&self.gfx_core, frame) {
+					log::error!("Present failed: {error}");
+				}
 
 				window.request_redraw();
 			}
@@ -211,6 +349,8 @@ impl ApplicationHandler for App {
 	}
 
 	fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+		self.destroy_depth_attachment();
+
 		self.deletion_queue.queue_deletion(self.vk_pipeline, &self.gfx_core);
 
 		if let Some(presentable_surface) = self.presentable_surface.take() {
@@ -289,12 +429,20 @@ fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh
 		vk::PushConstantRange {
 			stage_flags: vk::ShaderStageFlags::ALL_GRAPHICS,
 			offset: 0,
-			size: 16,
+			size: std::mem::size_of::<vk::DeviceAddress>() as u32 * 2,
 		}
 	];
 
 	let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
 		.push_constant_ranges(&push_constant_ranges);
+
+	let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
+		.depth_test_enable(true)
+		.depth_write_enable(true)
+		.depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL);
+
+	let mut rendering_create_info = vk::PipelineRenderingCreateInfo::default()
+		.depth_attachment_format(vk::Format::D32_SFLOAT);
 
 	unsafe {
 		let vk_pipeline_layout = core.vk_device.create_pipeline_layout(&pipeline_layout_info, None)?;
@@ -307,8 +455,10 @@ fn create_graphics_pipeline(core: &gfx::Core, vert_sh: vk::ShaderModule, frag_sh
 				.input_assembly_state(&ia_state)
 				.viewport_state(&viewport_state)
 				.rasterization_state(&raster_state)
+				.depth_stencil_state(&depth_stencil_state)
 				.multisample_state(&ms_state)
 				.dynamic_state(&dynamic_state)
+				.push_next(&mut rendering_create_info)
 		];
 
 		let pipelines = core.vk_device.create_graphics_pipelines(vk::PipelineCache::null(), &graphic_pipeline_create_infos, None)

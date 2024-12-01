@@ -242,6 +242,7 @@ pub struct StagingBuffer {
 
 	mapped_ptr: *mut u8,
 	allocation_size: usize,
+	write_cursor: usize,
 
 	pub device_address: vk::DeviceAddress,
 
@@ -289,6 +290,7 @@ impl StagingBuffer {
 
 			mapped_ptr,
 			allocation_size: allocation_size as usize,
+			write_cursor: 0,
 
 			device_address,
 
@@ -303,11 +305,32 @@ impl StagingBuffer {
 		deletion_queue.queue_deletion_after(self.vk_memory, self.last_upload_timeline_value + 1);
 	}
 
-	pub fn write<T>(&self, data: &T)
+	pub fn allocate_write_space(&mut self, size: usize, alignment: usize) -> usize {
+		let align_offset = unsafe {
+			self.mapped_ptr.add(self.write_cursor).align_offset(alignment)
+		};
+
+		let offset = self.write_cursor + align_offset;
+		self.write_cursor = offset + size;
+
+		assert!(self.write_cursor <= self.allocation_size, "Staging buffer overflow");
+
+		offset
+	}
+
+	pub fn write<T>(&mut self, data: &T) -> vk::DeviceAddress
 		where T: bytemuck::NoUninit + Copy
 	{
+		let alignment = std::mem::align_of::<T>().max(8);
+		let offset = self.allocate_write_space(std::mem::size_of::<T>(), alignment);
+
 		unsafe {
-			self.mapped_ptr.cast::<T>().write(*data);
+			self.mapped_ptr
+				.add(offset)
+				.cast::<T>()
+				.write(*data);
 		}
+
+		self.device_address + offset as u64
 	}
 }
